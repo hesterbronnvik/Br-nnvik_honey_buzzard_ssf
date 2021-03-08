@@ -1,4 +1,5 @@
-setwd("C:/Users/Tess Bronnvik/Desktop")
+
+setwd("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf")
 ssf_packs <- c("lubridate", "amt", "sf", "move", "dplyr", "purrr", "ggpubr", "ggplot2", "RNCEP")
 lapply(ssf_packs, require, character.only = TRUE)
 
@@ -44,15 +45,7 @@ NCEP.loxodrome.na <- function (lat1, lat2, lon1, lon2) {
     head <-NA}
   return(head)
 }
-wind_support <- function(u,v,heading) {
-  angle <- atan2(u,v) - heading/180*pi
-  return(cos(angle) * sqrt(u*u+v*v))
-  14
-}
-cross_wind <- function(u,v,heading) {
-  angle <- atan2(u,v) - heading/180*pi
-  return(sin(angle) * sqrt(u*u+v*v))
-}
+source("C:/Users/Tess Bronnvik/Desktop/wind_support_Kami.R")
 
 ### Prepare data for Movebank
 #############################################################################################
@@ -83,7 +76,7 @@ Autumns <- Autumns %>% filter(name == "Aida" | name == "Anni" | name == "Edit" |
                                 name == "Sven" | name == "Tor"| name == "Ulla" | name == "Valentin"| name == "Venus" | name == "Viljo")
 
 ## set criteria for tracks
-stepNumber <- 9 # random steps
+stepNumber <- 29 # random steps
 stepLength <- 60 # minutes between bursts
 toleranceLength <- 15 # tolerance in minutes
 wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs")
@@ -102,12 +95,30 @@ autumn_track <- lapply(split(Autumns, Autumns$name), function(x){
   burst <- steps_by_burst(trk, keep_cols = "start")
   
   # create random steps using fitted gamma and von mises distributions and append
+  sl_distr <- fit_distr(burst$sl_, "gamma")
+  ta_distr <- fit_distr(burst$ta_, "vonmises")
+  
   rnd_stps <- burst %>%  random_steps(n_control = stepNumber,
                                       angle = 0,
-                                      rand_sl = random_numbers(make_gamma_distr(shape = 1, scale = 1), n = 1e+05),
-                                      rand_ta = random_numbers(make_vonmises_distr(kappa = 1), n = 1e+05),)
-  
+                                      rand_sl = random_numbers(sl_distr, n = 1e+05),
+                                      rand_ta = random_numbers(ta_distr, n = 1e+05))
+                                        
 }) %>% reduce(rbind)
+
+
+all(complete.cases(autumn_track$case_))
+
+true_steps <- autumn_track[autumn_track$case_ == TRUE,]
+false_steps <- autumn_track[autumn_track$case_ == FALSE,]
+
+
+obs <- true_steps %>% select(id, sl_) %>% 
+  ggplot(aes(sl_, fill = factor(id))) + ggtitle("Observed") + geom_density(alpha = 0.4)
+rand <- false_steps %>% select(id, sl_) %>% 
+  ggplot(aes(sl_, fill = factor(id))) + ggtitle("Alternative") + geom_density(alpha = 0.4)
+
+ggarrange(obs, rand, ncol=2, nrow=1, legend = "none")
+
 
 autumn_track %>%
   mutate(used = as.numeric(case_)) %>%
@@ -166,6 +177,8 @@ ssfdat
 ssfdata <- read.csv("juvenile_autumns-895583402217231081.csv", stringsAsFactors = F)
 ssfdata$timestamp <- as.POSIXct(strptime(ssfdata$timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
 ssfdata$year <- format(as.POSIXct(ssfdata$timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y")
+ssfdata$case_ <- as.numeric(ssfdata$case_)
+
 
 # get the years for each individual
 ssfdata$a <- ifelse(ssfdata$year == "2012" & ssfdata$id == "Aida", "1", NA)
@@ -246,7 +259,9 @@ ssfdata$order[!is.na(ssfdata$j)] = ssfdata$j[!is.na(ssfdata$j)]
 ssfdata$order[!is.na(ssfdata$k)] = ssfdata$k[!is.na(ssfdata$k)]    
 ssfdata$order[!is.na(ssfdata$l)] = ssfdata$l[!is.na(ssfdata$l)]   
 
+colnames(ssfdata)
 #ssfdata[c(25:48)] <- NULL
+ssfdata <- ssfdata[ssfdata$id != "Jaana",]
 
 ## derive the cross and tail wind components
 colnames(ssfdata)[c(1,2,3,4,16,17)] <- c("lon1","lon2","lat1","lat2","u_wind","v_wind")
@@ -259,7 +274,6 @@ ssfdata$cross <- cross_wind(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssf
 summary(ssfdata)
 
 ### normalize the data
-library("dplyr")
 ssfdata <- ssfdata %>% 
   #group_by(id) %>% 
   mutate(scaled_cross = abs(as.numeric(scale(cross, center = T, scale = T)))) %>%
@@ -274,7 +288,7 @@ data_sf <- ssfdata %>% st_as_sf(coords = c("lon2", "lat2"), crs = wgs)
 
 # nest the data
 ind_by_year <- ssfdata %>% 
-  group_by(id) %>% 
+  group_by(id,year) %>% 
   nest()
 
 # build the model function
@@ -286,16 +300,13 @@ ind_model <- function(df) {
 ind_by_year <- ind_by_year %>% 
   mutate(model = purrr::map(data, ind_model))
 
-
-ind_by_year <- ssfdata %>% 
-  group_by(id) %>%
-  nest %>%
-  mutate(model = purrr::map(data, fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_)) %>%
-           coef %>% 
-           as.list %>%
-           as_tibble)) %>% 
+ind_by_year2 <- ind_by_year %>% 
+  mutate(coefs = purrr::map(model, coef)) %>% 
   unnest(model) %>%
   unnest(data)
+
+#ind_by_year2 <- ind_by_year2 %>% separate(coefs, c("scaled_tail", "scaled_cross"))
+  
 
 
 ## build individual models
@@ -504,7 +515,7 @@ VE1t <- coef(summary(modelVenus1))["scaled_tail",]
 VI1t <- coef(summary(modelViljo1))["scaled_tail",]
 
 tails_stats <- rbind(AI1t,AN1t,ED1t,EL1t,EM1t,GI1t,HA1t,#JA1t,
-                     JA2t,#JA3t,
+                     #JA2t,#JA3t,
                      JL1t,KI1t,#LA1t,
                      LA2t,#LA3t,
                      LA4t,LI1t,MA1t,MII1t,MO1t,MO2t,#MO3t,MO4t,
@@ -551,7 +562,7 @@ VE1c <- coef(summary(modelVenus1))["scaled_cross",]
 VI1c <- coef(summary(modelViljo1))["scaled_cross",]
 
 crosses_stats <- rbind(AI1c,AN1c,ED1c,EL1c,EM1c,GI1c,HA1c,#JA1c,
-                     JA2c,#JA3c,
+                     #JA2c,#JA3c,
                      JL1c,KI1c,#LA1c,
                      LA2c,#LA3c,
                      LA4c,LI1c,MA1c,MII1c,MO1c,MO2c,#MO3c,MO4c,
@@ -560,16 +571,16 @@ crosses_stats <- rbind(AI1c,AN1c,ED1c,EL1c,EM1c,GI1c,HA1c,#JA1c,
 colnames(crosses_stats)[] <- c("cross_coef", "cross_exp(coef)", "cross_se(coef)", "cross_z", "cross_Pr(>|z|)")
 
 coefs_df <- NULL
-coefs_df$id <- c("Aida", "Anni", "Edit", "Ella", "Emma", "Gilda", "Hans", "Jaana", "Julia",
-                 "Kirsi", "Lars", "Lars", "Lisa", "Matti", "Miikka", "Mohammed", "Mohammed",
+coefs_df$id <- c("Aida", "Anni", "Edit", "Ella", "Emma", "Gilda", "Hans",# "Jaana", 
+                 "Julia", "Kirsi", "Lars", "Lars", "Lisa", "Matti", "Miikka", "Mohammed", "Mohammed",
                  "Per", "Rudolf", "Senta", "Senta", "Senta","Sven", "Tor", "Ulla","Valentin",
                  "Valentin", "Venus","Viljo")
-coefs_df$autumn <- c(1,1,1,1,1,1,1,2,1,1,2,4,1,1,1,1,2,1,1,1,2,3,1,1,1,1,2,1,1)
+coefs_df$autumn <- c(1,1,1,1,1,1,1,1,1,2,4,1,1,1,1,2,1,1,1,2,3,1,1,1,1,2,1,1)
 coefs_df <- as.data.frame(coefs_df)
 
 wind_stats <- cbind(coefs_df, tails_stats, crosses_stats)
 #write.csv(wind_stats, "wind_stats.csv", row.names = F)
-wind_stats <- read.csv("wind_stats.csv", stringsAsFactors = F)
+#wind_stats <- read.csv("wind_stats.csv", stringsAsFactors = F)
 #############################################################################################
 
 
