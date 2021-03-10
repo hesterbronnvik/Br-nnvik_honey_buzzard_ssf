@@ -1,8 +1,10 @@
 
+# set working directory and load required packages
 setwd("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf")
-ssf_packs <- c("lubridate", "amt", "sf", "move", "dplyr", "purrr", "ggpubr", "ggplot2", "RNCEP")
+ssf_packs <- c("lubridate", "amt", "sf", "move", "dplyr", "purrr", "ggpubr", "ggplot2", "RNCEP", "mapview")
 lapply(ssf_packs, require, character.only = TRUE)
 
+# import required functions
 NCEP.loxodrome.na <- function (lat1, lat2, lon1, lon2) {
   deg2rad <- pi/180
   acot <- function(x) {
@@ -47,6 +49,13 @@ NCEP.loxodrome.na <- function (lat1, lat2, lon1, lon2) {
 }
 source("C:/Users/Tess Bronnvik/Desktop/wind_support_Kami.R")
 
+## set criteria for tracks
+stepNumber <- 9 # random steps
+stepLength <- 60 # minutes between bursts
+toleranceLength <- 15 # tolerance in minutes
+wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs")
+
+
 ### Prepare data for Movebank
 #############################################################################################
 full_data <- read.csv("full_buzz_set.csv",stringsAsFactors = F, header = T)
@@ -75,42 +84,78 @@ Autumns <- Autumns %>% filter(name == "Aida" | name == "Anni" | name == "Edit" |
                                 name == "Piff"| name == "Puff" | name == "Roosa"| name == "Rudolf" | name == "Senta"| 
                                 name == "Sven" | name == "Tor"| name == "Ulla" | name == "Valentin"| name == "Venus" | name == "Viljo")
 
-## set criteria for tracks
-stepNumber <- 29 # random steps
-stepLength <- 60 # minutes between bursts
-toleranceLength <- 15 # tolerance in minutes
-wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs")
+# do simple plots of lat/long to check for outliers
+ggplot(Autumns, aes(x=long, y=lat)) + geom_point()+ facet_wrap(~name, scales="free")
+ggplot(Autumns, aes(x=long, y=lat, color=as.factor(name))) + geom_point()
+
+# create a move object for plotting
+mv <- move(x = Autumns$long, y = Autumns$lat, time = Autumns$timestamp, data = Autumns, animal = Autumns$name, proj = wgs)
+maps::map("world", xlim = c(-20,58), ylim = c(-25,70))
+points(mv, cex = 0.3, pch = 16) #adds points to the previous plot
+
+# create a spatial object for plotting
+data_sp <- Autumns
+coordinates(data_sp) <- ~ long + lat
+proj4string(data_sp) <- wgs
+mapView(data_sp, zcol = "cy")
+
+#autumn_track2 <- as_tibble(autumn_track)
+#sp_tracks <- SpatialPointsDataFrame(autumn_track2[,c("x2_","y2_")], autumn_track2, proj4string=CRS("+init=epsg:4326"))
+#mapView(sp_tracks)
+
+# make the data of class track
+trk <- mk_track(Autumns, .x=long, .y=lat, .t=timestamp, id = name, crs = CRS("+init=epsg:4326"))
+
+# check whether timestamps are in order 
+is.sorted = Negate(is.unsorted)
+is.sorted(trk$t_)
+
+#transform back to geographic coordinates
+trk <- transform_coords(trk, CRS("+init=epsg:3857")) # pseudo-Mercator in meters (https://epsg.io/3857)
 
 
 ## prepare data for the SSF 
-autumn_track <- lapply(split(Autumns, Autumns$name), function(x){
-  trk <- mk_track(Autumns, .x=long, .y=lat, .t=timestamp, id = name, 
-                  crs = wgs) %>%
-    track_resample(rate = minutes(stepLength),
-                   tolerance = minutes(toleranceLength))
+autumn_track <- lapply(split(trk, trk$id), function(x){
   
-  trk <- filter_min_n_burst(trk, 3)
+  # create tracks and make times equal
+  temp_track <- track_resample(x, rate = minutes(stepLength), tolerance = minutes(toleranceLength))
+  
+  # remove bursts with fewer than 3 points
+  temp_track <- filter_min_n_burst(temp_track, 3)
   
   # burst steps
-  burst <- steps_by_burst(trk, keep_cols = "start")
+  temp_track <- steps_by_burst(temp_track, keep_cols = "start")
   
-  # create random steps using fitted gamma and von mises distributions and append
-  sl_distr <- fit_distr(burst$sl_, "gamma")
-  ta_distr <- fit_distr(burst$ta_, "vonmises")
+  # create random steps using fitted gamma and von Mises distributions and append
+  #sl_distr <- fit_distr(burst$sl_, "gamma")
+  #ta_distr <- fit_distr(burst$ta_, "vonmises")
   
   rnd_stps <- burst %>%  random_steps(n_control = stepNumber,
                                       angle = 0,
                                       rand_sl = random_numbers(sl_distr, n = 1e+05),
                                       rand_ta = random_numbers(ta_distr, n = 1e+05))
-                                        
+  
 }) %>% reduce(rbind)
-
+autumn_track <- as_tibble(autumn_track)
+head(autumn_track)
 
 all(complete.cases(autumn_track$case_))
 
+# plot some comparisons of random and matched points
+Aida <- autumn_track[autumn_track$id == "Aida",]
+Anni <- autumn_track[autumn_track$id == "Anni",]
+Edit <- autumn_track[autumn_track$id == "Edit",]
+Ella <- autumn_track[autumn_track$id == "Ella",]
+Aida_plot <- ggplot(Aida, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
+Anni_plot <- ggplot(Anni, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
+Edit_plot <- ggplot(Edit, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
+Ella_plot <- ggplot(Ella, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
+ggarrange(Aida_plot, Anni_plot, Edit_plot,  Ella_plot, ncol=2, nrow=2, common.legend = TRUE, legend="bottom")
+
+# plot the step lengths for observed and random steps
 true_steps <- autumn_track[autumn_track$case_ == TRUE,]
 false_steps <- autumn_track[autumn_track$case_ == FALSE,]
-
+summary(false_steps$sl_)
 
 obs <- true_steps %>% select(id, sl_) %>% 
   ggplot(aes(sl_, fill = factor(id))) + ggtitle("Observed") + geom_density(alpha = 0.4)
@@ -119,10 +164,23 @@ rand <- false_steps %>% select(id, sl_) %>%
 
 ggarrange(obs, rand, ncol=2, nrow=1, legend = "none")
 
+# creat a new gamma distribution
+#library(tidyverse)
+# Calculate summary statistics
+#stats <- true_steps %>% summarise(Mean=mean(true_steps$sl_), Variance=var(true_steps$sl_))
+#stats
+# Derive parameter estimates
+#scale <- stats$Variance / stats$Mean
+#shape <-  stats$Mean / scale
+# Derive fitted PDF and compare with empirical PDF
+#fitted <- tibble(x=seq(from = 0,to = 53.26001, by = 0.25), y=dgamma(x, shape=shape, scale=scale))
+#true_steps %>% ggplot + geom_histogram(aes(x=sl_, y=..density..), bins=120) + geom_line(data=fitted, aes(x=x, y=y), colour="blue")
+#summary(fitted$x)
+
 
 autumn_track %>%
   mutate(used = as.numeric(case_)) %>%
-  filter(used == 0) %>% 
+  filter(used == 0) %>%
   group_by(step_id_) %>%
   summarise(n=n()) %>%
   filter(n != 9)
@@ -142,23 +200,22 @@ autumn_track$timestamp <- paste0(autumn_track$timestamp,".000" )
 #############################################################################################
 # create the tracks, re-sample them, filter bursts, convert to steps, and create alternatives
 ssfdat<-NULL
-temptrk<-with(juv_autumn_track, track(x=x_, y=y_, t=t_, id=id))
-uid<-unique(juv_autumn_track$id) # individual identifiers
+temptrk<-with(trk, track(x=x_, y=y_, t=t_, id=id))
+uid<-unique(trk$id) # individual identifiers
 luid<-length(uid) # number of unique individuals
 for(i in 1:luid){
   # Subset individuals & regularize track
   temp<-temptrk%>% filter(id==uid[i]) %>% 
-    track_resample(rate = minutes(stepLength),
-                   tolerance = minutes(toleranceLength))
+    track_resample(rate=minutes(stepLength), tolerance=minutes(toleranceLength))
   
   # Get rid of any bursts without at least 2 points
-  temp<-filter_min_n_burst(temp, 2)
+  temp<-filter_min_n_burst(temp, 3)
   
   # burst steps
   stepstemp<-steps_by_burst(temp)
   
   # create random steps using fitted gamma and von mises distributions and append
-  rnd_stps <- stepstemp %>% random_steps(n = stepNumber)
+  rnd_stps <- stepstemp %>%  random_steps(n = stepNumber)
   
   # append id
   rnd_stps<-rnd_stps%>%mutate(id=uid[i])
@@ -166,9 +223,9 @@ for(i in 1:luid){
   # append new data to data from other individuals
   ssfdat<-rbind(rnd_stps, ssfdat)
 }
-
 ssfdat<-as_tibble(ssfdat)
 ssfdat
+
 #############################################################################################
 
 
@@ -271,13 +328,13 @@ ssfdata$heading <- NCEP.loxodrome.na(lat1 = ssfdata$lat1, lat2 = ssfdata$lat2, l
 ssfdata$tail <- wind_support(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 ssfdata$cross <- cross_wind(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 
-summary(ssfdata)
+summary(ssfdata) # 254 NAs in heading
 
 ### normalize the data
 ssfdata <- ssfdata %>% 
   #group_by(id) %>% 
-  mutate(scaled_cross = abs(as.numeric(scale(cross, center = T, scale = T)))) %>%
-  mutate(scaled_tail = as.numeric(scale(tail, center = T, scale = T))) %>%
+  mutate(scaled_cross = abs(as.numeric(scale(cross, center = T, scale = T))),
+         scaled_tail = as.numeric(scale(tail, center = T, scale = T))) %>%
   ungroup()
 #############################################################################################
 data_sf <- ssfdata %>% st_as_sf(coords = c("lon2", "lat2"), crs = wgs)
@@ -306,8 +363,10 @@ ind_by_year2 <- ind_by_year %>%
   unnest(data)
 
 #ind_by_year2 <- ind_by_year2 %>% separate(coefs, c("scaled_tail", "scaled_cross"))
-  
 
+coefs <- lapply(split(ind_by_year, ind_by_year$id, ind_by_year$model), function(x){
+         coef(summary(x$model))["scaled_tail",]
+}) %>% reduce(rbind)
 
 ## build individual models
 modelAida1 <- ssfdata %>% 
@@ -461,7 +520,7 @@ modelViljo1 <- ssfdata %>%
 
 model_ids <- c(modelAida1, modelAnni1,modelEdit1,modelElla1,modelEmma1,modelGilda1,
                modelHans1,#modelJaana1,
-               modelJaana2,#modelJaana3,
+               #modelJaana2,modelJaana3,
                modelJulia1,modelKirsi1,# modelLars1,
                modelLars2,#modelLars3,
                modelLars4,modelLisa1,modelMatti1,
@@ -471,9 +530,8 @@ model_ids <- c(modelAida1, modelAnni1,modelEdit1,modelElla1,modelEmma1,modelGild
                modelViljo1)
 
 coefs <- lapply(model_ids, function(x){
-  coefficient <- coef(summary(x))["scaled_tail",]
+  coefs <- coef(summary(x))["scaled_tail",]
 }) %>% reduce(rbind)
-
 
 
 
@@ -579,6 +637,7 @@ coefs_df$autumn <- c(1,1,1,1,1,1,1,1,1,2,4,1,1,1,1,2,1,1,1,2,3,1,1,1,1,2,1,1)
 coefs_df <- as.data.frame(coefs_df)
 
 wind_stats <- cbind(coefs_df, tails_stats, crosses_stats)
+#wind_stats <- wind_stats[wind_stats$autumn == 1,] # select which years to plot
 #write.csv(wind_stats, "wind_stats.csv", row.names = F)
 #wind_stats <- read.csv("wind_stats.csv", stringsAsFactors = F)
 #############################################################################################
@@ -587,7 +646,7 @@ wind_stats <- cbind(coefs_df, tails_stats, crosses_stats)
 ### Plot the wind coefficients
 #############################################################################################
 
-tailwind_plot <-  ggplot(data = wind_stats, aes(x = autumn, y = tail_coef, colour = id, group = id)) + 
+tailwind_plot <-  ggplot(data = wind_stats, aes(x = id, y = tail_coef, colour = id, group = id)) + 
   theme(axis.text = element_text(size = 10),
         axis.title = element_text(size = 15),
         legend.text = element_text(size = 10),
@@ -597,13 +656,13 @@ tailwind_plot <-  ggplot(data = wind_stats, aes(x = autumn, y = tail_coef, colou
   geom_hline(yintercept = 0)
 
 
-crosswind_plot <-  ggplot(data = wind_stats, aes(x = autumn, y = cross_coef, colour = id, group = id)) + 
+crosswind_plot <-  ggplot(data = wind_stats, aes(x = id, y = cross_coef, colour = id, group = id)) + 
   theme(axis.text = element_text(size = 10),
         axis.title = element_text(size = 15),
         legend.position  = "none") +
         geom_point(size = 2.5) +
         ylim(-3,3)
 
-ggarrange(tailwind_plot, crosswind_plot, ncol=2, nrow=1, common.legend = TRUE, legend="right")
+ggarrange(tailwind_plot, crosswind_plot, ncol=2, nrow=1, legend = "none")# common.legend = TRUE, legend="right")
 #############################################################################################
 
