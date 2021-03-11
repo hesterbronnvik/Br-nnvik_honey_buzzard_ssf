@@ -106,29 +106,25 @@ mapView(data_sp, zcol = "cy")
 # make the data of class track
 trk <- mk_track(Autumns, .x=long, .y=lat, .t=timestamp, id = name, crs = CRS("+init=epsg:4326"))
 
-# check whether timestamps are in order 
-is.sorted = Negate(is.unsorted)
-is.sorted(trk$t_)
-
-#transform back to geographic coordinates
+#transform to geographic coordinates
 trk <- transform_coords(trk, CRS("+init=epsg:3857")) # pseudo-Mercator in meters (https://epsg.io/3857)
 
 
+
 ## prepare data for the SSF 
-autumn_track <- lapply(split(trk, trk$id), function(x){
+autumn_track <- lapply(split(Autumns, Autumns$name), function(x){
+  trk <- mk_track(Autumns,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs) %>%
+    transform_coords(CRS("+init=epsg:3857")) %>% 
+    track_resample(rate = minutes(stepLength), tolerance = minutes(toleranceLength))
   
-  # create tracks and make times equal
-  temp_track <- track_resample(x, rate = minutes(stepLength), tolerance = minutes(toleranceLength))
-  
-  # remove bursts with fewer than 3 points
-  temp_track <- filter_min_n_burst(temp_track, 3)
+  trk <- filter_min_n_burst(trk, 3)
   
   # burst steps
-  temp_track <- steps_by_burst(temp_track, keep_cols = "start")
+  burst <- steps_by_burst(trk, keep_cols = "start")
   
-  # create random steps using fitted gamma and von Mises distributions and append
-  #sl_distr <- fit_distr(burst$sl_, "gamma")
-  #ta_distr <- fit_distr(burst$ta_, "vonmises")
+  # create random steps using fitted gamma and von mises distributions and append
+  sl_distr <- fit_distr(burst$sl_, "gamma")
+  ta_distr <- fit_distr(burst$ta_, "vonmises")
   
   rnd_stps <- burst %>%  random_steps(n_control = stepNumber,
                                       angle = 0,
@@ -136,6 +132,7 @@ autumn_track <- lapply(split(trk, trk$id), function(x){
                                       rand_ta = random_numbers(ta_distr, n = 1e+05))
   
 }) %>% reduce(rbind)
+
 autumn_track <- as_tibble(autumn_track)
 head(autumn_track)
 
@@ -190,10 +187,17 @@ autumn_track %>%
 
 ## export for Movebank annotation
 
-names(autumn_track)[c(1,2,3,4)] <-c("lon1", "location-long", "lat1", "location-lat")
-autumn_track$timestamp <- as.character(autumn_track$t1_)
-autumn_track$timestamp <- paste0(autumn_track$timestamp,".000" )
-#write.csv(autumn_track, "juvenile_autumns.csv", row.names = F)
+#relabel the columns to clarify utms
+autumn_track$utm.easting<-autumn_track$x2_
+autumn_track$utm.northing<-autumn_track$y2_
+
+autumn_track2 <- SpatialPointsDataFrame(autumn_track[,c("x2_","y2_")], autumn_track, proj4string = CRS("+init=epsg:3857"))  
+ssf.df <- data.frame(spTransform(autumn_track2, CRS("+proj=longlat +datum=WGS84"))) 
+names(ssf.df)[c(8,17,18)] <-c("individual.local.identifier", "location-long", "location-lat")
+ssf.df$timestamp<-ssf.df$t1_
+ssf.df$timestamp <- paste0(ssf.df$timestamp,".000" )
+#write.csv(ssf.df, "juvenile_autumns_utm.csv", row.names = F)
+
 #############################################################################################
 
 ## The for loop approach
