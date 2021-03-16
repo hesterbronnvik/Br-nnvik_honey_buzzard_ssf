@@ -51,8 +51,8 @@ source("C:/Users/Tess Bronnvik/Desktop/wind_support_Kami.R")
 
 ## set criteria for tracks
 stepNumber <- 9 # random steps
-stepLength <- 60 # minutes between bursts
-toleranceLength <- 15 # tolerance in minutes
+stepLength <- 120 # minutes between bursts
+toleranceLength <- 120 # tolerance in minutes
 wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs")
 
 
@@ -99,22 +99,22 @@ coordinates(data_sp) <- ~ long + lat
 proj4string(data_sp) <- wgs
 mapView(data_sp, zcol = "cy")
 
-#autumn_track2 <- as_tibble(autumn_track)
-#sp_tracks <- SpatialPointsDataFrame(autumn_track2[,c("x2_","y2_")], autumn_track2, proj4string=CRS("+init=epsg:4326"))
-#mapView(sp_tracks)
-
 # make the data of class track
-trk <- mk_track(Autumns, .x=long, .y=lat, .t=timestamp, id = name, crs = CRS("+init=epsg:4326"))
+#trk <- mk_track(Autumns, .x=long, .y=lat, .t=timestamp, id = name, crs = CRS("+init=epsg:4326"))
 
 #transform to geographic coordinates
-trk <- transform_coords(trk, CRS("+init=epsg:3857")) # pseudo-Mercator in meters (https://epsg.io/3857)
+#trk <- transform_coords(trk, CRS("+init=epsg:3857")) # pseudo-Mercator in meters (https://epsg.io/3857)
 
-
+#the problem is that Jaana is one hour after Anni. 
+#Can I solve it by changing the track method so that each individual is tracked separately 
+#and then appended, or should I painstakingly resolve each its own? 
+#If this works to change the sl_ from 53.3, does it remove Ross Bay?
+# try old duplicate remove method. Try each individual?
 
 ## prepare data for the SSF 
-autumn_track <- lapply(split(Autumns, Autumns$name), function(x){
-  trk <- mk_track(Autumns,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs) %>%
-    transform_coords(CRS("+init=epsg:3857")) %>% 
+autumn_track <- lapply(split(Autumns_ts, Autumns_ts$name), function(x){
+  trk <- mk_track(x,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs) %>%
+    #transform_coords(CRS("+init=epsg:3857")) %>% 
     track_resample(rate = minutes(stepLength), tolerance = minutes(toleranceLength))
   
   trk <- filter_min_n_burst(trk, 3)
@@ -123,13 +123,11 @@ autumn_track <- lapply(split(Autumns, Autumns$name), function(x){
   burst <- steps_by_burst(trk, keep_cols = "start")
   
   # create random steps using fitted gamma and von mises distributions and append
-  sl_distr <- fit_distr(burst$sl_, "gamma")
-  ta_distr <- fit_distr(burst$ta_, "vonmises")
   
-  rnd_stps <- burst %>%  random_steps(n_control = stepNumber,
-                                      angle = 0,
-                                      rand_sl = random_numbers(sl_distr, n = 1e+05),
-                                      rand_ta = random_numbers(ta_distr, n = 1e+05))
+  
+  rnd_stps <- burst %>% random_steps(n_control = stepNumber)
+  
+  #rnd_stps<-rnd_stps %>% mutate(id = x$name)
   
 }) %>% reduce(rbind)
 
@@ -183,6 +181,7 @@ autumn_track %>%
   filter(n != 9)
 
 
+#ggplot(autumn_track, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
 
 
 ## export for Movebank annotation
