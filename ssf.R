@@ -52,7 +52,7 @@ source("C:/Users/Tess Bronnvik/Desktop/wind_support_Kami.R")
 ## set criteria for tracks
 stepNumber <- 9 # random steps
 stepLength <- 120 # minutes between bursts
-toleranceLength <- 120 # tolerance in minutes
+toleranceLength <- 15 # tolerance in minutes
 wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs")
 
 
@@ -63,26 +63,36 @@ full_data$timestamp <- as.POSIXct(strptime(full_data$dt, format = "%Y-%m-%d %H:%
 
 
 # get only autumn migrations
-Autumns <- full_data[grep("autumn", full_data$phase),]
+all_autumns <- full_data[grep("autumn", full_data$phase),]
 
 # find and remove duplicate observations
-ind2 <- Autumns %>% select(long, lat, name, timestamp) %>%
+ind2 <- all_autumns %>% select(long, lat, name, timestamp) %>%
   duplicated
 sum(ind2) # 59 duplicates
-Autumns <- Autumns[ind2!=TRUE,]
+all_autumns <- all_autumns[ind2!=TRUE,]
 
 ## order all the data by timestamp
-Autumns <- Autumns %>% group_by(name) %>% 
-  arrange(timestamp, .by_group = T) %>%
-  ungroup()
+all_autumns <- all_autumns %>% #group_by(name) %>% 
+  arrange(timestamp)#, .by_group = T) %>%
+  #ungroup()
 
-## remove unwanted individuals 
-Autumns <- Autumns %>% filter(name == "Aida" | name == "Anni" | name == "Edit" | name == "Ella" | 
+first_autumns <- all_autumns[all_autumns$phase == "first.autumn",]
+autumns <- all_autumns[all_autumns$phase == "autumn",]
+
+
+## all the juveniles
+Autumnsl <- first_autumns %>% filter(name == "Aida" | name == "Anni" | name == "Edit" | name == "Ella" | 
                                 name == "Emma" | name == "Gilda" | name == "Hans" | name == "Heidi" | 
-                                name == "Jaana"| name == "Julia" | name == "Kirsi"| name == "Lars"| name == "Lisa"|
-                                name == "Matti"| name == "Miikka" | name == "Mohammed" | name == "Per"| name == "Piff"| 
-                                name == "Piff"| name == "Puff" | name == "Roosa"| name == "Rudolf" | name == "Senta"| 
-                                name == "Sven" | name == "Tor"| name == "Ulla" | name == "Valentin"| name == "Venus" | name == "Viljo")
+                                #name == "Jaana"| 
+                                  name == "Julia" | name == "Kirsi"| name == "Lars"| name == "Lisa"|
+                                name == "Matti"| name == "Miikka" | name == "Mohammed" | name == "Per"| 
+                                #name == "Piff"| name == "Puff" | name == "Roosa"| 
+                                  #name == "Rudolf" |
+                                  #name == "Senta"| 
+                                name == "Sven" | #name == "Tor"|
+                                  name == "Ulla" | name == "Valentin"| name == "Venus" | name == "Viljo")
+
+Autumnsl <- first_autumns %>% filter(name == "Jaana"| name == "Senta")
 
 # do simple plots of lat/long to check for outliers
 ggplot(Autumns, aes(x=long, y=lat)) + geom_point()+ facet_wrap(~name, scales="free")
@@ -105,14 +115,10 @@ mapView(data_sp, zcol = "cy")
 #transform to geographic coordinates
 #trk <- transform_coords(trk, CRS("+init=epsg:3857")) # pseudo-Mercator in meters (https://epsg.io/3857)
 
-#the problem is that Jaana is one hour after Anni. 
-#Can I solve it by changing the track method so that each individual is tracked separately 
-#and then appended, or should I painstakingly resolve each its own? 
-#If this works to change the sl_ from 53.3, does it remove Ross Bay?
-# try old duplicate remove method. Try each individual?
 
 ## prepare data for the SSF 
-autumn_track <- lapply(split(Autumns_ts, Autumns_ts$name), function(x){
+set.seed(8675309)
+autumn_track <- lapply(split(Autumnsl, Autumnsl$name), function(x){
   trk <- mk_track(x,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs) %>%
     #transform_coords(CRS("+init=epsg:3857")) %>% 
     track_resample(rate = minutes(stepLength), tolerance = minutes(toleranceLength))
@@ -130,22 +136,22 @@ autumn_track <- lapply(split(Autumns_ts, Autumns_ts$name), function(x){
   #rnd_stps<-rnd_stps %>% mutate(id = x$name)
   
 }) %>% reduce(rbind)
-
+unique(autumn_track$id)
 autumn_track <- as_tibble(autumn_track)
 head(autumn_track)
 
 all(complete.cases(autumn_track$case_))
 
 # plot some comparisons of random and matched points
-Aida <- autumn_track[autumn_track$id == "Aida",]
 Anni <- autumn_track[autumn_track$id == "Anni",]
 Edit <- autumn_track[autumn_track$id == "Edit",]
-Ella <- autumn_track[autumn_track$id == "Ella",]
-Aida_plot <- ggplot(Aida, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
+Emma <- autumn_track[autumn_track$id == "Emma",]
+Gilda <- autumn_track[autumn_track$id == "Gilda",]
 Anni_plot <- ggplot(Anni, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
 Edit_plot <- ggplot(Edit, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
-Ella_plot <- ggplot(Ella, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
-ggarrange(Aida_plot, Anni_plot, Edit_plot,  Ella_plot, ncol=2, nrow=2, common.legend = TRUE, legend="bottom")
+Emma_plot <- ggplot(Emma, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
+Gilda_plot <- ggplot(Gilda, aes(x2_, y2_, color=case_))+geom_point()+facet_wrap(~id, scales="free")
+ggarrange(Anni_plot, Edit_plot, Emma_plot,  Gilda_plot, ncol=2, nrow=2, common.legend = TRUE, legend="bottom")
 
 # plot the step lengths for observed and random steps
 true_steps <- autumn_track[autumn_track$case_ == TRUE,]
@@ -159,7 +165,7 @@ rand <- false_steps %>% select(id, sl_) %>%
 
 ggarrange(obs, rand, ncol=2, nrow=1, legend = "none")
 
-# creat a new gamma distribution
+# create a new gamma distribution
 #library(tidyverse)
 # Calculate summary statistics
 #stats <- true_steps %>% summarise(Mean=mean(true_steps$sl_), Variance=var(true_steps$sl_))
@@ -187,15 +193,65 @@ autumn_track %>%
 ## export for Movebank annotation
 
 #relabel the columns to clarify utms
-autumn_track$utm.easting<-autumn_track$x2_
-autumn_track$utm.northing<-autumn_track$y2_
+#autumn_track$utm.easting<-autumn_track$x2_
+#autumn_track$utm.northing<-autumn_track$y2_
 
 autumn_track2 <- SpatialPointsDataFrame(autumn_track[,c("x2_","y2_")], autumn_track, proj4string = CRS("+init=epsg:3857"))  
-ssf.df <- data.frame(spTransform(autumn_track2, CRS("+proj=longlat +datum=WGS84"))) 
-names(ssf.df)[c(8,17,18)] <-c("individual.local.identifier", "location-long", "location-lat")
+ssf.df <- autumn_track#data.frame(spTransform(autumn_track2, CRS("+proj=longlat +datum=WGS84"))) 
+names(ssf.df)[c(8,2,4)] <-c("individual.local.identifier", "location-long", "location-lat")
 ssf.df$timestamp<-ssf.df$t1_
 ssf.df$timestamp <- paste0(ssf.df$timestamp,".000" )
-#write.csv(ssf.df, "juvenile_autumns_utm.csv", row.names = F)
+#write.csv(ssf.df, "12.juv.1A.60.15.csv", row.names = F)
+
+## make a track for the subsequent years
+
+# find and remove duplicate observations
+ind2 <- autumns %>% select(long, lat, name, timestamp) %>%
+  duplicated
+sum(ind2) # 59 duplicates
+autumns <- autumns[ind2!=TRUE,]
+
+## order all the data by timestamp
+autumns <- autumns %>% 
+  arrange(timestamp)
+
+# remove unwanted individuals 
+autumn2 <- autumns %>% filter( 
+    name == "Jaana"|
+    name == "Lars" |
+    name == "Mohammed" |
+    name == "Senta"| 
+    name == "Valentin")
+
+## set criteria for tracks
+stepNumber <- 29 # random steps
+stepLength <- 120 # minutes between bursts
+toleranceLength <- 15 # tolerance in minutes
+wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs")
+
+
+set.seed(8675309)
+autumn2_track <- lapply(split(autumn2, autumn2$name), function(x){
+  trk <- mk_track(x,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs) %>%
+    #transform_coords(CRS("+init=epsg:3857")) %>% 
+    track_resample(rate = minutes(stepLength), tolerance = minutes(toleranceLength))
+  
+  trk <- filter_min_n_burst(trk, 3)
+  
+  # burst steps
+  burst <- steps_by_burst(trk, keep_cols = "start")
+  
+  # create random steps using fitted gamma and von mises distributions and append
+  
+  
+  rnd_stps <- burst %>% random_steps(n_control = stepNumber)
+  
+  #rnd_stps<-rnd_stps %>% mutate(id = x$name)
+  
+}) %>% reduce(rbind)
+unique(autumn2_track$id)
+autumn2_track <- as_tibble(autumn2_track)
+head(autumn2_track)
 
 #############################################################################################
 
