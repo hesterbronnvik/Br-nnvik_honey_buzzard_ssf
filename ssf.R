@@ -91,20 +91,26 @@ Autumnsl <- first_autumns %>% filter(name == "Aida" | name == "Anni" | name == "
                                   #name == "Senta"| 
                                 name == "Sven" | #name == "Tor"|
                                   name == "Ulla" | name == "Valentin"| name == "Venus" | name == "Viljo")
+## all the adults
+Autumnsl <- autumns %>% filter(name == "Aarne" | name == "Annika" |name == "Jouko" |name == "Kari" |name == "Mikko" |name == "Paivi")
 
-Autumnsl <- first_autumns %>% filter(name == "Jaana"| name == "Senta")
+## the multi-year juveniles
+Autumnsl <- autumns %>% filter(name == "Lars" | name == "Mohammed" |name == "Valentin")# |name == "Senta" |name == "Jaana")
+
 
 # do simple plots of lat/long to check for outliers
-ggplot(Autumns, aes(x=long, y=lat)) + geom_point()+ facet_wrap(~name, scales="free")
-ggplot(Autumns, aes(x=long, y=lat, color=as.factor(name))) + geom_point()
+ggplot(Autumnsl, aes(x=long, y=lat)) + geom_point()+ facet_wrap(~name, scales="free")
+ggplot(Autumnsl, aes(x=long, y=lat, color=as.factor(name))) + geom_point()
 
 # create a move object for plotting
-mv <- move(x = Autumns$long, y = Autumns$lat, time = Autumns$timestamp, data = Autumns, animal = Autumns$name, proj = wgs)
+mv <- move(x = Autumnsl$long, y = Autumnsl$lat, time = Autumnsl$timestamp, data = Autumnsl, animal = Autumnsl$name, proj = wgs)
 maps::map("world", xlim = c(-20,58), ylim = c(-25,70))
 points(mv, cex = 0.3, pch = 16) #adds points to the previous plot
 
 # create a spatial object for plotting
-data_sp <- Autumns
+data_sp <- Autumnsl %>% group_by(name) %>% 
+  arrange(timestamp, .by_group = T) %>%
+  ungroup()
 coordinates(data_sp) <- ~ long + lat
 proj4string(data_sp) <- wgs
 mapView(data_sp, zcol = "cy")
@@ -165,19 +171,6 @@ rand <- false_steps %>% select(id, sl_) %>%
 
 ggarrange(obs, rand, ncol=2, nrow=1, legend = "none")
 
-# create a new gamma distribution
-#library(tidyverse)
-# Calculate summary statistics
-#stats <- true_steps %>% summarise(Mean=mean(true_steps$sl_), Variance=var(true_steps$sl_))
-#stats
-# Derive parameter estimates
-#scale <- stats$Variance / stats$Mean
-#shape <-  stats$Mean / scale
-# Derive fitted PDF and compare with empirical PDF
-#fitted <- tibble(x=seq(from = 0,to = 53.26001, by = 0.25), y=dgamma(x, shape=shape, scale=scale))
-#true_steps %>% ggplot + geom_histogram(aes(x=sl_, y=..density..), bins=120) + geom_line(data=fitted, aes(x=x, y=y), colour="blue")
-#summary(fitted$x)
-
 
 autumn_track %>%
   mutate(used = as.numeric(case_)) %>%
@@ -201,57 +194,7 @@ ssf.df <- autumn_track#data.frame(spTransform(autumn_track2, CRS("+proj=longlat 
 names(ssf.df)[c(8,2,4)] <-c("individual.local.identifier", "location-long", "location-lat")
 ssf.df$timestamp<-ssf.df$t1_
 ssf.df$timestamp <- paste0(ssf.df$timestamp,".000" )
-#write.csv(ssf.df, "12.juv.1A.60.15.csv", row.names = F)
-
-## make a track for the subsequent years
-
-# find and remove duplicate observations
-ind2 <- autumns %>% select(long, lat, name, timestamp) %>%
-  duplicated
-sum(ind2) # 59 duplicates
-autumns <- autumns[ind2!=TRUE,]
-
-## order all the data by timestamp
-autumns <- autumns %>% 
-  arrange(timestamp)
-
-# remove unwanted individuals 
-autumn2 <- autumns %>% filter( 
-    name == "Jaana"|
-    name == "Lars" |
-    name == "Mohammed" |
-    name == "Senta"| 
-    name == "Valentin")
-
-## set criteria for tracks
-stepNumber <- 29 # random steps
-stepLength <- 120 # minutes between bursts
-toleranceLength <- 15 # tolerance in minutes
-wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs")
-
-
-set.seed(8675309)
-autumn2_track <- lapply(split(autumn2, autumn2$name), function(x){
-  trk <- mk_track(x,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs) %>%
-    #transform_coords(CRS("+init=epsg:3857")) %>% 
-    track_resample(rate = minutes(stepLength), tolerance = minutes(toleranceLength))
-  
-  trk <- filter_min_n_burst(trk, 3)
-  
-  # burst steps
-  burst <- steps_by_burst(trk, keep_cols = "start")
-  
-  # create random steps using fitted gamma and von mises distributions and append
-  
-  
-  rnd_stps <- burst %>% random_steps(n_control = stepNumber)
-  
-  #rnd_stps<-rnd_stps %>% mutate(id = x$name)
-  
-}) %>% reduce(rbind)
-unique(autumn2_track$id)
-autumn2_track <- as_tibble(autumn2_track)
-head(autumn2_track)
+#write.csv(ssf.df, "3.juv.2A.120.15.csv", row.names = F)
 
 #############################################################################################
 
@@ -290,10 +233,11 @@ ssfdat
 
 ### Prepare data for models
 #############################################################################################
-ssfdata <- read.csv("juvenile_autumns-895583402217231081.csv", stringsAsFactors = F)
+ssfdata <- read.csv("21.juv.1A.120.15-7774754251229039880.csv", stringsAsFactors = F)
 ssfdata$timestamp <- as.POSIXct(strptime(ssfdata$timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
 ssfdata$year <- format(as.POSIXct(ssfdata$timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y")
 ssfdata$case_ <- as.numeric(ssfdata$case_)
+colnames(ssfdata)[8] <- "id"
 
 
 # get the years for each individual
@@ -361,6 +305,7 @@ ssfdata$i <- ifelse(ssfdata$year == "2012" & ssfdata$id == "Valentin", "1", NA)
 ssfdata$j <- ifelse(ssfdata$year == "2015" & ssfdata$id == "Valentin", "2", NA)
 ssfdata$k <- ifelse(ssfdata$year == "2012" & ssfdata$id == "Venus", "1", NA)
 ssfdata$l <- ifelse(ssfdata$year == "2014" & ssfdata$id == "Viljo", "1", NA)
+ssfdata$m <- ifelse(ssfdata$year == "2013" & ssfdata$id == "Heidi", "1", NA)
 
 ssfdata$order[!is.na(ssfdata$a)] = ssfdata$a[!is.na(ssfdata$a)]
 ssfdata$order[!is.na(ssfdata$b)] = ssfdata$b[!is.na(ssfdata$b)]
@@ -374,10 +319,11 @@ ssfdata$order[!is.na(ssfdata$i)] = ssfdata$i[!is.na(ssfdata$i)]
 ssfdata$order[!is.na(ssfdata$j)] = ssfdata$j[!is.na(ssfdata$j)]    
 ssfdata$order[!is.na(ssfdata$k)] = ssfdata$k[!is.na(ssfdata$k)]    
 ssfdata$order[!is.na(ssfdata$l)] = ssfdata$l[!is.na(ssfdata$l)]   
+ssfdata$order[!is.na(ssfdata$m)] = ssfdata$m[!is.na(ssfdata$m)]
 
 colnames(ssfdata)
-#ssfdata[c(25:48)] <- NULL
-ssfdata <- ssfdata[ssfdata$id != "Jaana",]
+#ssfdata[c(26:49)] <- NULL
+all(complete.cases(ssfdata$order))
 
 ## derive the cross and tail wind components
 colnames(ssfdata)[c(1,2,3,4,16,17)] <- c("lon1","lon2","lat1","lat2","u_wind","v_wind")
@@ -387,7 +333,7 @@ ssfdata$heading <- NCEP.loxodrome.na(lat1 = ssfdata$lat1, lat2 = ssfdata$lat2, l
 ssfdata$tail <- wind_support(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 ssfdata$cross <- cross_wind(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 
-summary(ssfdata) # 254 NAs in heading
+summary(ssfdata) # 118 NAs in heading
 
 ### normalize the data
 ssfdata <- ssfdata %>% 
@@ -416,12 +362,35 @@ ind_model <- function(df) {
 ind_by_year <- ind_by_year %>% 
   mutate(model = purrr::map(data, ind_model))
 
+# apply the coefs
 ind_by_year2 <- ind_by_year %>% 
-  mutate(coefs = purrr::map(model, coef)) %>% 
-  unnest(model) %>%
+  mutate(coefs = purrr::map(model, coef))
+
+# extract the coefficients
+coef_tibble <- unnest(ind_by_year2, coefs)
+
+# get tibbles of each coefficient set
+tail_coefs <- do.call(rbind, lapply(unique(coef_tibble$id), function(x){head(coef_tibble[coef_tibble$id == x,], 1)}))
+cross_coefs <- do.call(rbind, lapply(unique(coef_tibble$id), function(x){tail(coef_tibble[coef_tibble$id == x,], 1)}))
+
+
+
+library(broom)
+ind_by_year3 <- ssfdata %>% 
+  group_by(id,year) %>% 
+  nest %>% 
+  mutate(model = purrr::map(data, ~ fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_), data = .) %>%
+                        tidy %>%
+                        dplyr::select(term, estimate) %>% 
+                        #spread(term, estimate) %>% 
+                        rename_all(~ c("intc", paste0("coef", 1:2))))) %>%  
+  unnest(model1) %>%
   unnest(data)
 
+## extract coefficients
 #ind_by_year2 <- ind_by_year2 %>% separate(coefs, c("scaled_tail", "scaled_cross"))
+
+model_coefs <- purrr::map(ind_by_year, ~summary(.)$coefficients[,4])
 
 coefs <- lapply(split(ind_by_year, ind_by_year$id, ind_by_year$model), function(x){
          coef(summary(x$model))["scaled_tail",]
@@ -460,9 +429,9 @@ modelHans1 <- ssfdata %>%
 #  dplyr::filter(id == "Jaana" & order == "1") %>%
 #  fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_))
 
-modelJaana2 <- ssfdata %>% 
-  dplyr::filter(id == "Jaana" & order == "2") %>%
-  fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_))
+#modelJaana2 <- ssfdata %>% 
+#  dplyr::filter(id == "Jaana" & order == "2") %>%
+#  fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_))
 
 #modelJaana3 <- ssfdata %>% 
 #  dplyr::filter(id == "Jaana" & order == "3") %>%
@@ -476,9 +445,9 @@ modelKirsi1 <- ssfdata %>%
   dplyr::filter(id == "Kirsi" & order == "1") %>%
   fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_))
 
-#modelLars1 <- ssfdata %>% 
-#  dplyr::filter(id == "Lars" & order == "1") %>%
-#  fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_))
+modelLars1 <- ssfdata %>% 
+  dplyr::filter(id == "Lars" & order == "1") %>%
+  fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_))
 
 modelLars2 <- ssfdata %>% 
   dplyr::filter(id == "Lars" & order == "2") %>%
@@ -581,11 +550,13 @@ model_ids <- c(modelAida1, modelAnni1,modelEdit1,modelElla1,modelEmma1,modelGild
                modelHans1,#modelJaana1,
                #modelJaana2,modelJaana3,
                modelJulia1,modelKirsi1,# modelLars1,
-               modelLars2,#modelLars3,
-               modelLars4,modelLisa1,modelMatti1,
-               modelMiikka1,modelMohammed1,modelMohammed2,#modelMohammed3, modelMohammed4, 
-               modelPer1,modelRudolf1,modelSenta1,modelSenta2,modelSenta3,#modelSenta4,
-               modelSven1,modelTor,modelUlla1,modelValentin1,modelValentin2,modelVenus1,
+               #modelLars2,#modelLars3,modelLars4,
+               modelLisa1,modelMatti1,
+               modelMiikka1,modelMohammed1,#modelMohammed2,modelMohammed3, modelMohammed4, 
+               modelPer1,#modelRudolf1,modelSenta1,modelSenta2,modelSenta3,modelSenta4,
+               modelSven1,#modelTor,
+               modelUlla1,modelValentin1,#modelValentin2,
+               modelVenus1,
                modelViljo1)
 
 coefs <- lapply(model_ids, function(x){
