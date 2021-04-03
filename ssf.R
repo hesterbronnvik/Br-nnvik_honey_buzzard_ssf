@@ -333,6 +333,16 @@ ssfdata$heading <- NCEP.loxodrome.na(lat1 = ssfdata$lat1, lat2 = ssfdata$lat2, l
 ssfdata$tail <- wind_support(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 ssfdata$cross <- cross_wind(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 
+
+# find and plot NA values in thermal uplift
+thermalNA <- is.na(ssfdata$thermal)
+sum(thermalNA) # 3896 NA values
+missing_thermals <- ssfdata[thermalNA!=F,] # select the observations missing values
+coordinates(missing_thermals) <- ~ lon1 + lat1 # prepare for a map
+proj4string(missing_thermals) <- wgs
+mapView(missing_thermals, zcol = "id")
+
+
 summary(ssfdata) # 118 NAs in heading
 
 ### normalize the data
@@ -367,6 +377,14 @@ ind_by_year <- ind_by_year %>%
 # apply the coefs
 ind_by_year2 <- ind_by_year %>% 
   mutate(ssf_coefs = purrr::map(ssf_model, coef))
+
+
+# extract AICs
+ssf_models <- unnest(ind_by_year2, ssf_model)
+ssf_models <- lapply(unique(ssf_models$id), function(x){head(ssf_models[ssf_models$id == x,], 1)}) %>% 
+  reduce(rbind)
+ssf_models <- ssf_models %>% 
+  mutate(ssf_AIC = purrr::map(ssf_model, extractAIC))
 
 ## extract model coefficients for plotting
 ssf_coefs <- unnest(ind_by_year2, ssf_coefs)
