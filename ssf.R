@@ -272,45 +272,17 @@ ssfdat
 #############################################################################################
 juveniles <- read.csv("all.juv.1A.99s.240&120.15-5221204997286432070.csv", stringsAsFactors = F)
 juveniles$timestamp <- as.POSIXct(strptime(juveniles$timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
-juveniles$year <- format(as.POSIXct(juveniles$timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y")
-juveniles$id_year <- paste(juveniles$id,juveniles$year,sep="_")
-juveniles$Migration <- "First"
 
 juveniles_experienced <- read.csv("all.juv.234A.99s.120.15-5922315139798958994.csv", stringsAsFactors = F)
 juveniles_experienced$timestamp <- as.POSIXct(strptime(juveniles_experienced$timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
-juveniles_experienced$year <- format(as.POSIXct(juveniles_experienced$timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y")
-juveniles_experienced$id_year <- paste(juveniles_experienced$id,juveniles_experienced$year,sep="_")
-
-juveniles_experienced$Migration <- NA
-juveniles_experienced$Migration[which(juveniles_experienced$id_year == "Jaana_2013" | 
-                                        juveniles_experienced$id_year == "Lars_2013" | 
-                                        juveniles_experienced$id_year == "Mohammed_2018" |
-                                        juveniles_experienced$id_year == "Senta_2015" |
-                                        juveniles_experienced$id_year == "Valentin_2015")] <- "Second"
-
-juveniles_experienced$Migration[which(juveniles_experienced$id_year == "Jaana_2014" | 
-                                        juveniles_experienced$id_year == "Lars_2014" | 
-                                        juveniles_experienced$id_year == "Senta_2016")] <- "Third"
-
-juveniles_experienced$Migration[which(juveniles_experienced$id_year == "Lars_2015" |
-                                        juveniles_experienced$id_year == "Senta_2017")] <- "Fourth"
 
 adults <- read.csv("all.adults.99s.120.15-579802980818675201.csv", stringsAsFactors = F)
 adults$timestamp <- as.POSIXct(strptime(adults$timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
-adults$year <- format(as.POSIXct(adults$timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y")
-adults$id_year <- paste(adults$id,adults$year,sep="_")
-adults$Migration <- ">4"
-adults <- adults %>% filter(id_year == "Annika_2015" |
-                            id_year == "Jouko_2015" |
-                            id_year == "Mikko_2015" |
-                            id_year == "Paivi_2017")
+
 
 ssfdata <- rbind(juveniles,juveniles_experienced,adults)
 ssfdata$case_ <- as.numeric(ssfdata$case_)
 
-
-# remove Lisa and Sven, the outliers in coefs
-#ssfdata <- ssfdata %>% filter(id != "Sven" & id != "Lisa" & id != "Kirsi")
 
 ## how many steps per day left?
 juveniles$ymd <- format(as.POSIXct(juveniles$timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d")
@@ -456,6 +428,7 @@ ssf_modelt <- function(df) {
   fit_clogit(case_ ~ scaled_thermal + strata(step_id_), data = df)
 }
 
+
 SSF_selections <- ssfdata %>% 
   group_by(id,year) %>% 
   nest() %>% 
@@ -490,20 +463,90 @@ SSF_selections <- ssfdata %>%
          orographic = map_dbl(ssf_modelO, ~AIC(.)),
          thermal = map_dbl(ssf_modelt, ~AIC(.)))
 
-# Extract deltaAICs
-SSF_AICs <- colSums(SSF_selections[19:33]) # get the summed AICs from all 15 models
+## Extract deltaAICs
+# assign migrations so that AICs can be taken for each
+SSF_selections$id_year <- paste(SSF_selections$id,SSF_selections$year,sep="_")
+SSF_selections$Migration <- NA
+SSF_selections$Migration[which(SSF_selections$id_year == "Jaana_2013" | # add year 2 info
+                             SSF_selections$id_year == "Lars_2013" | 
+                             SSF_selections$id_year == "Mohammed_2018" | 
+                             SSF_selections$id_year == "Senta_2015" | 
+                             SSF_selections$id_year == "Valentin_2015")] <- "2"
+SSF_selections$Migration[which(SSF_selections$id_year == "Jaana_2014" | # add year 3 info
+                             SSF_selections$id_year == "Lars_2014" | 
+                             SSF_selections$id_year == "Senta_2016")] <- "3"
+SSF_selections$Migration[which(SSF_selections$id_year == "Lars_2015" | # add year 4 info
+                             SSF_selections$id_year == "Senta_2017")] <- "4"
+SSF_selections$Migration[which(SSF_selections$id_year == "Annika_2015" | # add adult info
+                             SSF_selections$id_year == "Jouko_2015" | 
+                             SSF_selections$id_year == "Mikko_2015" | 
+                             SSF_selections$id_year == "Paivi_2017")] <- "5 +" 
+SSF_selections$Migration[which(is.na(SSF_selections$Migration))] <- "1" # everything else is year 1
+
+# get the average AIC for each migration
+SSF_AICs <- lapply(split(SSF_selections, SSF_selections$Migration), function(x){
+  colMeans(x[19:33])
+}) %>% 
+  reduce(rbind) %>% 
+  t() 
+colnames(SSF_AICs) <- c("first_migration", "second_migration", "third_migration", "fourth_migration","adult_migration")
+
+
 SSF_AICs <- as.data.frame(SSF_AICs) %>%
   rownames_to_column() %>% 
-  rename(model = rowname,
-         AIC = (SSF_AICs)) %>% 
-  mutate(deltaAIC = AIC - min(AIC)) %>% # calculate the change in AIC from the best model
-  arrange(deltaAIC) # order the df by deltaAIC size
+  rename(model = rowname) %>% 
+  mutate(deltaAIC_1 = first_migration - min(first_migration),# calculate the change in AIC from the best model for each migration
+         deltaAIC_2 = second_migration - min(second_migration),
+         deltaAIC_3 = third_migration - min(third_migration),
+         deltaAIC_4 = fourth_migration - min(fourth_migration),
+         deltaAIC_5 = adult_migration - min(adult_migration),) %>% 
+  arrange(deltaAIC_1) # order the df by deltaAIC size
+
+#separate the migrations again in order to arrange each by best model
+SSF_AICs_1 <- SSF_AICs %>% 
+  select(model,first_migration,deltaAIC_1) %>% 
+  arrange(deltaAIC_1)
+
+SSF_AICs_2 <- SSF_AICs %>% 
+  select(model,second_migration,deltaAIC_2) %>% 
+  arrange(deltaAIC_2)
+
+SSF_AICs_3 <- SSF_AICs %>% 
+  select(model,third_migration,deltaAIC_3) %>% 
+  arrange(deltaAIC_3)
+
+SSF_AICs_4 <- SSF_AICs %>% 
+  select(model,fourth_migration,deltaAIC_4) %>% 
+  arrange(deltaAIC_4)
+
+SSF_AICs_5 <- SSF_AICs %>% 
+  select(model,adult_migration,deltaAIC_5) %>% 
+  arrange(deltaAIC_5)
 
 # print those values
 library(gridExtra)
-pdf("AICs.pdf", height=11, width=10)
-grid.table(SSF_AICs)
+pdf("AICs_1.pdf", height=11, width=10,onefile = F)
+grid.table(SSF_AICs_1)
 dev.off()
+
+pdf("AICs_2.pdf", height=11, width=10,onefile = F)
+grid.table(SSF_AICs_2)
+dev.off()
+
+pdf("AICs_3.pdf", height=11, width=10,onefile = F)
+grid.table(SSF_AICs_3)
+dev.off()
+
+pdf("AICs_4.pdf", height=11, width=10,onefile = F)
+grid.table(SSF_AICs_4)
+dev.off()
+
+pdf("AICs_5.pdf", height=11, width=10,onefile = F)
+grid.table(SSF_AICs_5)
+dev.off()
+
+library(pdftools)
+pdf_combine(c("AICs_1.pdf", "AICs_2.pdf", "AICs_3.pdf", "AICs_4.pdf", "AICs_5.pdf"), output = "AICs.pdf")
 
 ##########################################################################################
 
@@ -583,6 +626,7 @@ library(hrbrthemes)
 library(viridis)
 library(patchwork)
 ggplot(plot_data4, aes(x=Migration, y=ssf_coefs4, color = Migration)) + 
+  stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
   geom_jitter(aes(fill=Migration), size=2, width=0.2) +
   geom_line(aes(group = id),
             color = "grey",
