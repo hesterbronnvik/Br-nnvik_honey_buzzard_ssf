@@ -1,7 +1,7 @@
 
 # set working directory and load required packages
 setwd("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf")
-ssf_packs <- c("lubridate", "amt", "sf", "move", "dplyr", "purrr", "ggpubr", "ggplot2", "RNCEP", "mapview")
+ssf_packs <- c("lubridate", "amt", "sf", "move", "dplyr", "purrr", "ggpubr", "ggplot2", "RNCEP", "mapview","tidyverse","viridis","hrbrthemes","patchwork")
 lapply(ssf_packs, require, character.only = TRUE)
 
 # import required functions
@@ -47,18 +47,18 @@ NCEP.loxodrome.na <- function (lat1, lat2, lon1, lon2) {
     head <-NA}
   return(head)
 }
-source("C:/Users/Tess Bronnvik/Desktop/wind_support_Kami.R")
+source("wind_support_Kami.R")
 
 ## set criteria for tracks
-stepNumber <- 99 # random steps
-stepLength <- 120 # minutes between bursts
-toleranceLength <- 15 # tolerance in minutes
+stepNumber <- 100 # random steps
+stepLength <- 240 # minutes between bursts
+toleranceLength <- 30 # tolerance in minutes
 wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs")
 
 
 ### Prepare data for Movebank
 #############################################################################################
-full_data <- read.csv("full_buzz_set.csv",stringsAsFactors = F, header = T)
+full_data <- read.csv("./original_data/full_buzz_set.csv",stringsAsFactors = F, header = T)
 full_data$timestamp <- as.POSIXct(strptime(full_data$dt, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
 
 
@@ -76,27 +76,25 @@ all_autumns <- all_autumns %>% #group_by(name) %>%
   arrange(timestamp)#, .by_group = T) %>%
   #ungroup()
 
-first_autumns <- all_autumns[all_autumns$phase == "first.autumn",]
-autumns <- all_autumns[all_autumns$phase == "autumn",]
+## the freshmen with 1 hour median sampling rate
+Autumnsl <- all_autumns %>% filter(name == "Anni" | name == "Edit" | name == "Emma" | name == "Julia" |
+                                     name == "Matti"| name == "Miikka" | name == "Per"| 
+                                     name == "Sven" | name == "Ulla" | name == "Viljo")
+## the freshmen with 2 hour median sampling rate
+Autumnsl <- all_autumns %>% filter(name == "Aida" | name == "Ella" | name == "Heidi" | name == "Kirsi"| 
+                                     name == "Lisa"| name == "Rudolf" | name == "Valentin")
+## the freshmen with 3 hour median sampling rate
+Autumnsl <- all_autumns %>% filter(name == "Mohammed")
+## the freshmen with 4 hour median sampling rate
+Autumnsl <- all_autumns %>% filter(name == "Gilda" | name == "Hans" | name == "Jaana"| name == "Lars"| 
+                                     name == "Piff"| name == "Puff" | name == "Roosa"| name == "Senta"| 
+                                     name == "Tor"| name == "Venus")
+## all the adults (can measure at 2 hours)
+Autumnsl <- all_autumns %>% filter(name == "Aarne" | name == "Annika" |name == "Jouko" |
+                                     name == "Kari" |name == "Mikko" |name == "Paivi")
 
 
-## all the juveniles
-Autumnsl <- first_autumns %>% filter(name == "Aida" | name == "Anni" | name == "Edit" | name == "Ella" | 
-                                name == "Emma" | name == "Gilda" | name == "Hans" | name == "Heidi" | 
-                                #name == "Jaana"| 
-                                  name == "Julia" | name == "Kirsi"| name == "Lars"| name == "Lisa"|
-                                name == "Matti"| name == "Miikka" | name == "Mohammed" | name == "Per"| 
-                                #name == "Piff"| name == "Puff" | name == "Roosa"| 
-                                  name == "Rudolf" |
-                                  #name == "Senta"| 
-                                name == "Sven" | #name == "Tor"|
-                                  name == "Ulla" | name == "Valentin"| name == "Venus" | name == "Viljo")
-## all the adults
-Autumnsl <- autumns %>% filter(name == "Aarne" | name == "Annika" |name == "Jouko" |name == "Kari" |name == "Mikko" |name == "Paivi")
-
-## the multi-year juveniles
-Autumnsl <- autumns %>% filter(name == "Lars" | name == "Mohammed" |name == "Valentin" |name == "Senta" |name == "Jaana")
-
+## for mapping by migration, add info
 Autumnsl$Migration <- "First"
 Autumnsl <- Autumnsl %>% select(lat,long,Migration, name)
 
@@ -134,10 +132,10 @@ maps::map("world", xlim = c(-20,58), ylim = c(-25,70))
 points(mv, cex = 0.3, pch = 16) #adds points to the previous plot
 
 # create a spatial object for plotting
-data_sp <- map_autumns#[map_autumns$yr == "2014",]
-coordinates(data_sp) <- ~ long + lat
+data_sp <- autumn_track[autumn_track$case_ == 1,]
+coordinates(data_sp) <- ~ x1_ + y1_
 proj4string(data_sp) <- wgs
-mapView(data_sp, zcol = "Migration", burst = T, cex = 3, color = rainbow)
+mapView(data_sp, zcol = "year", burst = F, cex = 3, color = rainbow)
 #mapshot(all_track_map,file = paste0(getwd(), "/map.png"),remove_controls = c("zoomControl", "layersControl"))
 
 library(ggmap)
@@ -159,9 +157,12 @@ ggmap(myMap)+
 #transform to geographic coordinates
 #trk <- transform_coords(trk, CRS("+init=epsg:3857")) # pseudo-Mercator in meters (https://epsg.io/3857)
 
+Autumnsl$id_year <- paste(Autumnsl$name,Autumnsl$yr, sep="_")
+unique(Autumnsl$id_year)
 
-## prepare data for the SSF 
-autumn_track <- lapply(split(Autumnsl, Autumnsl$name), function(x){
+stepLength <- 120
+
+autumn_track <- lapply(split(Autumnsl, Autumnsl$id_year), function(x){
   trk <- mk_track(x,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs) %>%
     #transform_coords(CRS("+init=epsg:3857")) %>% 
     track_resample(rate = minutes(stepLength), tolerance = minutes(toleranceLength))
@@ -231,7 +232,7 @@ ssf.df <- autumn_track#data.frame(spTransform(autumn_track2, CRS("+proj=longlat 
 names(ssf.df)[c(2,4)] <-c("location-long", "location-lat")
 ssf.df$timestamp<-ssf.df$t1_
 ssf.df$timestamp <- paste0(ssf.df$timestamp,".000" )
-write.csv(ssf.df, "all.adults.99s.120.15.csv", row.names = F)
+write.csv(ssf.df, "6.adults.100s.120.30.csv", row.names = F)
 
 #############################################################################################
 
@@ -270,18 +271,12 @@ ssfdat
 
 ### Prepare data for models
 #############################################################################################
-juveniles <- read.csv("all.juv.1A.99s.240&120.15-5221204997286432070.csv", stringsAsFactors = F)
-juveniles$timestamp <- as.POSIXct(strptime(juveniles$timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
-
-juveniles_experienced <- read.csv("all.juv.234A.99s.120.15-5922315139798958994.csv", stringsAsFactors = F)
-juveniles_experienced$timestamp <- as.POSIXct(strptime(juveniles_experienced$timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
-
-adults <- read.csv("all.adults.99s.120.15-579802980818675201.csv", stringsAsFactors = F)
-adults$timestamp <- as.POSIXct(strptime(adults$timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC")
-
-
-ssfdata <- rbind(juveniles,juveniles_experienced,adults)
-ssfdata$case_ <- as.numeric(ssfdata$case_)
+ssfdata <- list.files(pattern = "*.csv") %>% 
+  map_df(~read_csv(.)) %>% 
+  mutate(timestamp = as.POSIXct(strptime(timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC"),
+         year = format(as.POSIXct(timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y"),
+         id_year = paste(id,year,sep="_"),
+         case_ = as.numeric(case_))
 
 
 ## how many steps per day left?
@@ -300,6 +295,20 @@ ssfdata$heading <- NCEP.loxodrome.na(lat1 = ssfdata$lat1, lat2 = ssfdata$lat2, l
 ssfdata$tail <- wind_support(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 ssfdata$cross <- cross_wind(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 
+# find and remove sea crossings
+ssfdata_test <- ssfdata # save data before changing them
+seacrossing_points <- !is.na(ssfdata_test$ECMWF.ERA5.SL.Sea.Surface.Temperature) # get points over the sea (not NA sea surface)
+sum(seacrossing_points) # 91823 NA values
+ssfdata_test$id_year_burst_step <- paste(ssfdata_test$id,ssfdata_test$year,
+                                         ssfdata_test$burst_,ssfdata_test$step_id_,sep = "_") # create a new column of each point for a unique vector
+seacrossings <- ssfdata_test[seacrossing_points == T,] # make a df of the points over seas
+ssfdata_test <- ssfdata_test %>% # remove all steps containing seacrossings
+  group_by(id_year_burst_step) %>% 
+  filter(!id_year_burst_step %in% seacrossings$id_year_burst_step) %>% 
+  ungroup()
+
+#ssfdata_saved <- ssfdata
+#ssfdata <- ssfdata_test
 
 # find and plot NA values in thermal uplift
 thermalNA <- is.na(ssfdata$thermal)
@@ -329,6 +338,7 @@ ssfdata <- ssfdata[thermalNA != T,]
 Edit_ssfdata <- ssfdata[ssfdata$id == "Edit",] # burst 1 step 16 (True) & burst 3 step 380
 Annika_ssfdata <- ssfdata[ssfdata$id == "Annika",] # burst 1 417 step 171 (True) & burst 419 step 177
 
+
 #remove those data from the data set
 ssfdata <- ssfdata %>% filter(id != "Edit" &
                               id != "Annika")
@@ -337,11 +347,14 @@ ssfdata <- ssfdata %>% filter(id != "Edit" &
 Edit_ssfdata <- Edit_ssfdata[which(Edit_ssfdata$step_id_ != 16),] # remove step with 94 NAs
 Annika_ssfdata <- Annika_ssfdata[which(Annika_ssfdata$step_id_ != 171),] # remove step with 9 NAs
 
+
 # add the IDs back to the data
 ssfdata <- rbind(ssfdata,Edit_ssfdata,Annika_ssfdata)
+
   
 # select 50 steps from each step_id_. Choosing the first 50 allows protection of True steps.
 ssfdata <- ssfdata %>% 
+  mutate(id_year = paste(id,year,sep = "_")) %>% 
   group_by(id_year, burst_, step_id_) %>% 
   slice(1:50) %>% 
   ungroup()
@@ -352,8 +365,8 @@ ssfdata <- ssfdata %>%
   #group_by(id) %>% 
   mutate(scaled_cross = abs(as.numeric(scale(cross, center = T, scale = T))),
          scaled_tail = as.numeric(scale(tail, center = T, scale = T)),
-         scaled_thermal = scale(thermal, center = T, scale = T),
-         scaled_orographic = scale(orographic, center = T, scale = T)) %>%
+         scaled_thermal = as.numeric(scale(thermal, center = T, scale = T)),
+         scaled_orographic = as.numeric(scale(orographic, center = T, scale = T))) %>%
   ungroup()
 #############################################################################################
 data_sf <- ssfdata %>% st_as_sf(coords = c("lon2", "lat2"), crs = wgs)
@@ -363,34 +376,40 @@ data_sf <- ssfdata %>% st_as_sf(coords = c("lon2", "lat2"), crs = wgs)
 #############################################################################################
 
 # build the model function
-ssf_model4 <- function(df) {
+ssf_modelTCtO <- function(df) {
   fit_clogit(case_ ~ scaled_tail + scaled_cross + scaled_thermal + scaled_orographic + strata(step_id_), data = df)
 }
 
-ssf_model3 <- function(df) {
-  fit_clogit(case_ ~ scaled_tail + scaled_cross + scaled_orographic + strata(step_id_), data = df)
+ssf_modelTCt <- function(df) {
+  fit_clogit(case_ ~ scaled_tail + scaled_cross + scaled_thermal + strata(step_id_), data = df)
 }
 
-ssf_model2 <- function(df) {
+ssf_modelTC <- function(df) {
   fit_clogit(case_ ~ scaled_tail + scaled_cross + strata(step_id_), data = df)
 }
 
-
+# For stepwise model selection, 
 # nest the data, then apply above models to each individual for each year and extract AIC
 SSF_results <- ssfdata %>% 
   group_by(id,year) %>% 
   nest() %>% 
-  mutate(ssf_model4 = purrr::map(data, ssf_model4), # add each model as a column of lists 
-         ssf_model3 = purrr::map(data, ssf_model3),
-         ssf_model2 = purrr::map(data, ssf_model2),
-         ssf_coefs4 = purrr::map(ssf_model4, coef), # extract the coefficients for each model
-         ssf_coefs3 = purrr::map(ssf_model3, coef),
-         ssf_coefs2 = purrr::map(ssf_model2, coef),
-         AIC_4 = map_dbl(ssf_model4, ~AIC(.)),
-         AIC_3 = map_dbl(ssf_model3, ~AIC(.)),
-         AIC_2 = map_dbl(ssf_model2, ~AIC(.)))
+  mutate(ssf_modelTCtO = purrr::map(data, ssf_modelTCtO), # add each model as a column of lists 
+         ssf_modelTCt = purrr::map(data, ssf_modelTCt),
+         ssf_modelTC = purrr::map(data, ssf_modelTC),
+         ssf_coefsTCtO = purrr::map(ssf_modelTCtO, coef), # extract the coefficients for each model
+         ssf_coefsTCt = purrr::map(ssf_modelTCt, coef),
+         ssf_coefsTC = purrr::map(ssf_modelTC, coef),
+         AIC_TCtO = map_dbl(ssf_modelTCtO, ~AIC(.)),
+         AIC_TCt = map_dbl(ssf_modelTCt, ~AIC(.)),
+         AIC_TC = map_dbl(ssf_modelTC, ~AIC(.)))
 
-# For model selection, build 16 models to cover all combinations of variables
+# to get stepwise regression on each id_year the model has to be built as clogit
+library(MASS)
+Senta <- ssfdata[ssfdata$id_year == "Senta_2017",]
+Senta15_model <- ssf_modelTCtO(Senta)
+stepAIC(Senta15_model)
+
+# For all-possible-regressions model selection, build 16 models to cover all combinations of variables
 ssf_modelCO <- function(df) {
   fit_clogit(case_ ~ scaled_cross + scaled_orographic + strata(step_id_), data = df)
 }
@@ -400,8 +419,8 @@ ssf_modelCOt <- function(df) {
 ssf_modelCt <- function(df) {
   fit_clogit(case_ ~ scaled_cross + scaled_thermal + strata(step_id_), data = df)
 }
-ssf_modelCTt <- function(df) {
-  fit_clogit(case_ ~ scaled_cross + scaled_tail + scaled_thermal + strata(step_id_), data = df)
+ssf_modelCTO <- function(df) {
+  fit_clogit(case_ ~ scaled_cross + scaled_tail + scaled_orographic + strata(step_id_), data = df)
 }
 ssf_modelTO <- function(df) {
   fit_clogit(case_ ~ scaled_tail + scaled_orographic + strata(step_id_), data = df)
@@ -428,40 +447,66 @@ ssf_modelt <- function(df) {
   fit_clogit(case_ ~ scaled_thermal + strata(step_id_), data = df)
 }
 
-
+ssfdata <- ssfdata %>% filter(id_year != "Jaana_2014" & id_year != "Senta_2017")
 SSF_selections <- ssfdata %>% 
   group_by(id,year) %>% 
   nest() %>% 
-  mutate(ssf_model4 = purrr::map(data, ssf_model4), # add each model as a column of lists 
-         ssf_model3 = purrr::map(data, ssf_model3),
-         ssf_model2 = purrr::map(data, ssf_model2),
-         ssf_modelCO = purrr::map(data, ssf_modelCO),
+  mutate(ssf_modelTCtO = purrr::map(data, ssf_modelTCtO), # add each model as a column of lists 
+         ssf_modelTCt = purrr::map(data, ssf_modelTCt),
          ssf_modelCOt = purrr::map(data, ssf_modelCOt),
-         ssf_modelCt = purrr::map(data, ssf_modelCt),
-         ssf_modelCTt = purrr::map(data, ssf_modelCTt),
-         ssf_modelTO = purrr::map(data, ssf_modelTO),
+         ssf_modelCTO = purrr::map(data, ssf_modelCTO),
          ssf_modelTOt = purrr::map(data, ssf_modelTOt),
+         ssf_modelTC = purrr::map(data, ssf_modelTC),
+         ssf_modelTO = purrr::map(data, ssf_modelTO),
+         ssf_modelCt = purrr::map(data, ssf_modelCt),
          ssf_modelTt = purrr::map(data, ssf_modelTt),
          ssf_modelOt = purrr::map(data, ssf_modelOt),
+         ssf_modelCO = purrr::map(data, ssf_modelCO),
          ssf_modelC = purrr::map(data, ssf_modelC),
          ssf_modelT = purrr::map(data, ssf_modelT),
          ssf_modelO = purrr::map(data, ssf_modelO),
          ssf_modelt = purrr::map(data, ssf_modelt),
-         tail_cross_thermal_orographic = map_dbl(ssf_model4, ~AIC(.)), # extract AIC for each model
-         tail_cross_orographic = map_dbl(ssf_model3, ~AIC(.)),
-         tail_cross = map_dbl(ssf_model2, ~AIC(.)),
-         cross_orographic = map_dbl(ssf_modelCO, ~AIC(.)),
+         tail_cross_thermal_orographic = map_dbl(ssf_modelTCtO, ~AIC(.)), # extract AIC for each model
+         tail_cross_thermal = map_dbl(ssf_modelTCt, ~AIC(.)),
          cross_thermal_orographic = map_dbl(ssf_modelCOt, ~AIC(.)),
-         cross_thermal = map_dbl(ssf_modelCt, ~AIC(.)),
-         tail_cross_thermal = map_dbl(ssf_modelCTt, ~AIC(.)),
-         tail_orographic = map_dbl(ssf_modelTO, ~AIC(.)),
+         tail_cross_orographic = map_dbl(ssf_modelCTO, ~AIC(.)),
          tail_thermal_orographic = map_dbl(ssf_modelTOt, ~AIC(.)),
+         tail_cross = map_dbl(ssf_modelTC, ~AIC(.)),
+         cross_orographic = map_dbl(ssf_modelCO, ~AIC(.)),
+         cross_thermal = map_dbl(ssf_modelCt, ~AIC(.)),
+         tail_orographic = map_dbl(ssf_modelTO, ~AIC(.)),
          tail_thermal = map_dbl(ssf_modelTt, ~AIC(.)),
          thermal_orographic = map_dbl(ssf_modelOt, ~AIC(.)),
          cross = map_dbl(ssf_modelC, ~AIC(.)),
          tail = map_dbl(ssf_modelT, ~AIC(.)),
          orographic = map_dbl(ssf_modelO, ~AIC(.)),
          thermal = map_dbl(ssf_modelt, ~AIC(.)))
+
+# for only the all-four model and each one removing only one variable at a time
+SSF_selections_Round1 <- ssfdata %>% 
+  group_by(id,year) %>% 
+  nest() %>% 
+  mutate(ssf_modelTCtO = purrr::map(data, ssf_modelTCtO), # add each model as a column of lists 
+         ssf_modelTCt = purrr::map(data, ssf_modelTCt),
+         ssf_modelCOt = purrr::map(data, ssf_modelCOt),
+         ssf_modelCTO = purrr::map(data, ssf_modelCTO),
+         ssf_modelTOt = purrr::map(data, ssf_modelTOt),
+         tail_cross_thermal_orographic = map_dbl(ssf_modelTCtO, ~AIC(.)), # extract AIC for each model
+         tail_cross_thermal = map_dbl(ssf_modelTCt, ~AIC(.)),
+         cross_thermal_orographic = map_dbl(ssf_modelCOt, ~AIC(.)),
+         tail_cross_orographic = map_dbl(ssf_modelCTO, ~AIC(.)),
+         tail_thermal_orographic = map_dbl(ssf_modelTOt, ~AIC(.)))
+
+# looking at each model with only two variables left from the model removing orographic uplift
+SSF_selections_Round2 <- ssfdata %>% 
+  group_by(id,year) %>% 
+  nest() %>% 
+  mutate(ssf_modelTC = purrr::map(data, ssf_modelTC),
+         ssf_modelCt = purrr::map(data, ssf_modelCt),
+         ssf_modelTt = purrr::map(data, ssf_modelTt),
+         tail_cross = map_dbl(ssf_modelTC, ~AIC(.)),
+         cross_thermal = map_dbl(ssf_modelCt, ~AIC(.)),
+         tail_thermal = map_dbl(ssf_modelTt, ~AIC(.)))
 
 ## Extract deltaAICs
 # assign migrations so that AICs can be taken for each
@@ -491,37 +536,52 @@ SSF_AICs <- lapply(split(SSF_selections, SSF_selections$Migration), function(x){
   t() 
 colnames(SSF_AICs) <- c("first_migration", "second_migration", "third_migration", "fourth_migration","adult_migration")
 
+# set the order to display models in
+model_order <- c("tail_cross_thermal_orographic", "tail_cross_thermal", "cross_thermal_orographic",
+                 "tail_cross_orographic", "tail_thermal_orographic","tail_cross","cross_orographic",
+                 "cross_thermal","tail_orographic", "tail_thermal", "thermal_orographic","cross",
+                 "tail","thermal","orographic")
 
+# calculate the deltaAICs and order
 SSF_AICs <- as.data.frame(SSF_AICs) %>%
   rownames_to_column() %>% 
-  rename(model = rowname) %>% 
+  rename(variables = rowname) %>% 
   mutate(deltaAIC_1 = first_migration - min(first_migration),# calculate the change in AIC from the best model for each migration
          deltaAIC_2 = second_migration - min(second_migration),
          deltaAIC_3 = third_migration - min(third_migration),
          deltaAIC_4 = fourth_migration - min(fourth_migration),
-         deltaAIC_5 = adult_migration - min(adult_migration),) %>% 
-  arrange(deltaAIC_1) # order the df by deltaAIC size
+         deltaAIC_5 = adult_migration - min(adult_migration),
+         variables =  factor(variables, levels = model_order)) %>%
+  arrange(variables)# order the df by variables size
+
+library(sjPlot)
+tab_df(allaicstab,
+       alternate.rows = T, # this colors the rows
+       title = "Model selection",
+       file = "SSF_AICs_scrm_3.doc")
 
 #separate the migrations again in order to arrange each by best model
 SSF_AICs_1 <- SSF_AICs %>% 
-  select(model,first_migration,deltaAIC_1) %>% 
+  select(variables,first_migration,deltaAIC_1) %>% 
   arrange(deltaAIC_1)
 
 SSF_AICs_2 <- SSF_AICs %>% 
-  select(model,second_migration,deltaAIC_2) %>% 
+  select(variables,second_migration,deltaAIC_2) %>% 
   arrange(deltaAIC_2)
 
 SSF_AICs_3 <- SSF_AICs %>% 
-  select(model,third_migration,deltaAIC_3) %>% 
+  select(variables,third_migration,deltaAIC_3) %>% 
   arrange(deltaAIC_3)
 
 SSF_AICs_4 <- SSF_AICs %>% 
-  select(model,fourth_migration,deltaAIC_4) %>% 
+  select(variables,fourth_migration,deltaAIC_4) %>% 
   arrange(deltaAIC_4)
 
 SSF_AICs_5 <- SSF_AICs %>% 
-  select(model,adult_migration,deltaAIC_5) %>% 
+  select(variables,adult_migration,deltaAIC_5) %>% 
   arrange(deltaAIC_5)
+
+allaicstab <- cbind(SSF_AICs_1,SSF_AICs_2,SSF_AICs_3,SSF_AICs_4,SSF_AICs_5)
 
 # print those values
 library(gridExtra)
@@ -554,18 +614,18 @@ pdf_combine(c("AICs_1.pdf", "AICs_2.pdf", "AICs_3.pdf", "AICs_4.pdf", "AICs_5.pd
 ##########################################################################################
 SSF_results$id_year <- paste(SSF_results$id,SSF_results$year,sep="_")
 
-ssf_coefs4 <- unnest(SSF_results, ssf_coefs4)
+ssf_coefsTCtO <- unnest(SSF_results, ssf_coefsTCtO)
 
-tail_coefs4 <- do.call(rbind, lapply(unique(ssf_coefs4$id_year), function(x){head(ssf_coefs4[ssf_coefs4$id_year == x,], 4)[1,]}))
-cross_coefs4 <- do.call(rbind, lapply(unique(ssf_coefs4$id_year), function(x){head(ssf_coefs4[ssf_coefs4$id_year == x,], 4)[2,]}))
-thermal_coefs4 <- do.call(rbind, lapply(unique(ssf_coefs4$id_year), function(x){head(ssf_coefs4[ssf_coefs4$id_year == x,], 4)[3,]}))
-orographic_coefs4 <- do.call(rbind, lapply(unique(ssf_coefs4$id_year), function(x){head(ssf_coefs4[ssf_coefs4$id_year == x,], 4)[4,]}))
+tail_coefs4 <- do.call(rbind, lapply(unique(ssf_coefsTCtO$id_year), function(x){head(ssf_coefsTCtO[ssf_coefsTCtO$id_year == x,], 4)[1,]}))
+cross_coefs4 <- do.call(rbind, lapply(unique(ssf_coefsTCtO$id_year), function(x){head(ssf_coefsTCtO[ssf_coefsTCtO$id_year == x,], 4)[2,]}))
+thermal_coefs4 <- do.call(rbind, lapply(unique(ssf_coefsTCtO$id_year), function(x){head(ssf_coefsTCtO[ssf_coefsTCtO$id_year == x,], 4)[3,]}))
+orographic_coefs4 <- do.call(rbind, lapply(unique(ssf_coefsTCtO$id_year), function(x){head(ssf_coefsTCtO[ssf_coefsTCtO$id_year == x,], 4)[4,]}))
 
 
-tail_coefs4$var <- "tailwind"
-cross_coefs4$var <- "crosswind"
-thermal_coefs4$var <- "thermal"
-orographic_coefs4$var <- "orographic"
+tail_coefs4$var <- "Wind support"
+cross_coefs4$var <- "Crosswind"
+thermal_coefs4$var <- "Thermal uplift"
+orographic_coefs4$var <- "Orographic uplift"
 
 plot_data4 <- rbind(tail_coefs4, cross_coefs4,thermal_coefs4,orographic_coefs4)
 
@@ -576,7 +636,7 @@ plot_data4$Migration[which(plot_data4$id_year == "Jaana_2013" | # add year 2 inf
                                     plot_data4$id_year == "Mohammed_2018" | 
                                     plot_data4$id_year == "Senta_2015" | 
                                     plot_data4$id_year == "Valentin_2015")] <- "2"
-plot_data4$Migration[which(plot_data4$id_year == "Jaana_2014" | # add year 3 info
+plot_data4$Migration[which(plot_data4$id_year == "Jaana_2014" | # add year 4 info
                                     plot_data4$id_year == "Lars_2014" | 
                                     plot_data4$id_year == "Senta_2016")] <- "3"
 plot_data4$Migration[which(plot_data4$id_year == "Lars_2015" | # add year 4 info
@@ -589,19 +649,19 @@ plot_data4$Migration[which(is.na(plot_data4$Migration))] <- "1" # everything els
 
 
 # repeat for each model
-ssf_coefs3 <- unnest(SSF_results, ssf_coefs3)
+ssf_coefs3 <- unnest(SSF_results, ssf_coefsTCt)
 
 
 tail_coefs3 <- do.call(rbind, lapply(unique(ssf_coefs3$id), function(x){head(ssf_coefs3[ssf_coefs3$id == x,], 3)[1,]}))
 cross_coefs3 <- do.call(rbind, lapply(unique(ssf_coefs3$id), function(x){head(ssf_coefs3[ssf_coefs3$id == x,], 3)[2,]}))
-orographic_coefs3 <- do.call(rbind, lapply(unique(ssf_coefs3$id), function(x){tail(ssf_coefs3[ssf_coefs3$id == x,], 3)[3,]}))
+thermal_coefs3 <- do.call(rbind, lapply(unique(ssf_coefs3$id), function(x){tail(ssf_coefs3[ssf_coefs3$id == x,], 3)[3,]}))
 
 
-tail_coefs3$var <- "tailwind"
-cross_coefs3$var <- "crosswind"
-orographic_coefs3$var <- "orographic"
+tail_coefs3$var <- "Wind support"
+cross_coefs3$var <- "Crosswind"
+thermal_coefs3$var <- "Thermal uplift"
 
-plot_data3 <- rbind(tail_coefs3, cross_coefs3,orographic_coefs3)
+plot_data3 <- rbind(tail_coefs3, cross_coefs3,thermal_coefs3)
 
 # model 2
 ssf_coefs2 <- unnest(SSF_results, ssf_coefs2)
@@ -622,19 +682,50 @@ plot_data2 <- rbind(tail_coefs2, cross_coefs2)
 #############################################################################################
 
 ## create a scatterplot showing each individual coef/year and connecting paths
-library(hrbrthemes)
-library(viridis)
-library(patchwork)
-ggplot(plot_data4, aes(x=Migration, y=ssf_coefs4, color = Migration)) + 
+tail_plot_data <- plot_data4[plot_data4$var == "Wind support",]
+tail_dots <- ggplot(tail_plot_data, aes(x=Migration, y=ssf_coefsTCtO, color = id)) + 
   stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
-  geom_jitter(aes(fill=Migration), size=2, width=0.2) +
-  geom_line(aes(group = id),
-            color = "grey",
-            arrow = arrow(type = "closed",length=unit(0.075, "inches"))) +
-  labs(x="Migration", y = "Coefficients") +
+  geom_jitter(aes(fill=id), size=2, width=0.2) +
+  geom_line(aes(group = id, color =id)) +
+  labs(title = "Wind support", x="Migration", y = "Coefficients") +
   geom_hline(yintercept = 0) +
-  facet_wrap(vars(var))
+  theme(legend.position = "none") #+facet_wrap(vars(var))
+cross_plot_data <- plot_data4[plot_data4$var == "Crosswind",]
+cross_dots <- ggplot(cross_plot_data, aes(x=Migration, y=ssf_coefsTCtO, color = id)) + 
+  stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
+  geom_jitter(aes(fill=id), size=2, width=0.2) +
+  geom_line(aes(group = id, color =id)) +
+  labs(title = "Crosswind", x="Migration", y = "Coefficients") +
+  geom_hline(yintercept = 0) +
+  theme(legend.position = "none") #+facet_wrap(vars(var))
+oro_plot_data <- plot_data4[plot_data4$var == "Orographic uplift",]
+oro_dots <- ggplot(oro_plot_data, aes(x=Migration, y=ssf_coefsTCtO, color = id)) + 
+  stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
+  geom_jitter(aes(fill=id), size=2, width=0.2) +
+  geom_line(aes(group = id, color =id)) +
+  labs(title = "Orographic uplift", x="Migration", y = "Coefficients") +
+  geom_hline(yintercept = 0) +
+  theme(legend.position = "none") #+facet_wrap(vars(var))
+thermal_plot_data <- plot_data4[plot_data4$var == "Thermal uplift",]
+thermal_dots <- ggplot(thermal_plot_data, aes(x=Migration, y=ssf_coefsTCtO, color = id)) + 
+  stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
+  geom_jitter(aes(fill=id), size=2, width=0.2) +
+  geom_line(aes(group = id, color =id)) +
+  labs(title = "Thermal uplift", x="Migration", y = "Coefficients") +
+  geom_hline(yintercept = 0) +
+  theme(legend.position = "none") #+facet_wrap(vars(var))
 
+ggarrange(tail_dots, cross_dots, thermal_dots,oro_dots, ncol=2, nrow=2, legend = "none")# common.legend = TRUE, legend="right")
+
+# the same plot but faceted so that the axes are common
+ggplot(plot_data3, aes(x=Migration, y=ssf_coefsTCt, color = id)) + 
+  stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
+  geom_jitter(aes(fill=id), size=2, width=0.2) +
+  geom_line(aes(group = id, color =id)) +
+  labs( x="Migration", y = "Coefficients") +
+  geom_hline(yintercept = 0) +
+  theme(legend.position = "none") +
+  facet_wrap(vars(var))
 
 ## create plots of the coefficients for all individuals
 violins4 <- ggplot(A2_plot_data4, aes(x=ssf_coefs4, y=var, fill=var)) + 
