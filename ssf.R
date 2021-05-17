@@ -76,25 +76,22 @@ all_autumns <- all_autumns %>% #group_by(name) %>%
   arrange(timestamp)#, .by_group = T) %>%
   #ungroup()
 
-## the freshmen with 1 hour median sampling rate
+## the individuals with 1 hour median sampling rate
 Autumnsl <- all_autumns %>% filter(name == "Anni" | name == "Edit" | name == "Emma" | name == "Julia" |
                                      name == "Matti"| name == "Miikka" | name == "Per"| 
-                                     name == "Sven" | name == "Ulla" | name == "Viljo")
-## the freshmen with 2 hour median sampling rate
-Autumnsl <- all_autumns %>% filter(name == "Aida" | name == "Ella" | name == "Heidi" | name == "Kirsi"| 
-                                     name == "Lisa"| name == "Rudolf" | name == "Valentin")
-## the freshmen with 3 hour median sampling rate
+                                     name == "Sven" | name == "Ulla" | name == "Viljo" |
+                                     name == "Jari" | name == "Johannes" | name == "Gilda")
+## the individuals with 2 hour median sampling rate
+Autumnsl <- all_autumns %>% filter(name == "Aida" | name == "Ella" | name == "Hans" | name == "Heidi" | name == "Kirsi"| 
+                                     name == "Lisa"| name == "Rudolf" | name == "Valentin" | 
+                                     name == "Aarne" | name == "Annika" |name == "Jouko" |
+                                     name == "Kari" |name == "Mikko" |name == "Paivi"| name == "Venus") # Annika, Jouko, and Venus throw errors in the spring
+## the individuals with 3 hour median sampling rate
 Autumnsl <- all_autumns %>% filter(name == "Mohammed")
-## the freshmen with 4 hour median sampling rate
-Autumnsl <- all_autumns %>% filter(name == "Gilda" | name == "Hans" | name == "Jaana"| name == "Lars"| 
-                                     name == "Piff"| name == "Puff" | name == "Roosa"| name == "Senta"| 
-                                     name == "Tor"| name == "Venus")
-## the adults (can measure at 2 hours)
-Autumnsl <- all_autumns %>% filter(name == "Aarne" | name == "Annika" |name == "Jouko" |
-                                     name == "Kari" |name == "Mikko" |name == "Paivi" |
-                                     name == "Jari" | name == "Johannes")
-## the adults (can measure at 4 hours)
-Autumnsl <- all_autumns %>% filter(name == "Tiina")
+## the individuals with 4 hour median sampling rate
+Autumnsl <- all_autumns %>% filter(name == "Jaana"| name == "Lars"| name == "Piff"| 
+                                     name == "Puff" | name == "Roosa"| name == "Senta"| 
+                                     name == "Tor" | name == "Tiina")
 
 ## for mapping by migration, add info
 Autumnsl$Migration <- "First"
@@ -153,12 +150,14 @@ ggmap(myMap)+
   theme(legend.position = "none") +
   labs(x="Longitude", y = "Latitude")
 
-# make the data of class track
+
 #trk <- mk_track(Autumns, .x=long, .y=lat, .t=timestamp, id = name, crs = CRS("+init=epsg:4326"))
 
 #transform to geographic coordinates
 #trk <- transform_coords(trk, CRS("+init=epsg:3857")) # pseudo-Mercator in meters (https://epsg.io/3857)
 
+
+## make the data of class track
 Autumnsl$id_year <- paste(Autumnsl$name,Autumnsl$yr, sep="_")
 unique(Autumnsl$id_year)
 
@@ -193,8 +192,7 @@ three.hours <- autumn_track
 four.hours <- autumn_track
 
 # combine those back into one data set
-autumn_track <- rbind(one.hours,two.hours)
-autumn_track <- rbind(three.hours,four.hours)
+autumn_track <- rbind(one.hours,two.hours,three.hours,four.hours)
 
 all(complete.cases(autumn_track$case_))
 
@@ -244,7 +242,7 @@ ssf.df <- autumn_track#data.frame(spTransform(autumn_track2, CRS("+proj=longlat 
 names(ssf.df)[c(2,4)] <-c("location-long", "location-lat")
 ssf.df$timestamp<-ssf.df$t1_
 ssf.df$timestamp <- paste0(ssf.df$timestamp,".000" )
-write.csv(ssf.df, "100s.240.30.csv", row.names = F)
+write.csv(ssf.df, "spring_tracks_100s.csv", row.names = F)
 
 #############################################################################################
 
@@ -283,30 +281,13 @@ ssfdat
 
 ### Prepare data for models
 #############################################################################################
-ssfdata <- list.files(pattern = "*.csv") %>% 
-  map_df(~read_csv(.)) %>% 
+half1 <- read.csv("half_track_100s-8458281616483740304.csv",stringsAsFactors = F, header = T)
+half2 <- read.csv("half_track2_100s-7832317087668080045.csv",stringsAsFactors = F, header = T)
+ssfdata <- rbind(half1,half2) %>% 
   mutate(timestamp = as.POSIXct(strptime(timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC"),
          year = format(as.POSIXct(timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y"),
          id_year = paste(id,year,sep="_"),
          case_ = as.numeric(case_))
-three_teens <- read.csv("./annotations/corrected_3.teens.100s.240.30-1893138523605161389.csv",stringsAsFactors = F)%>% 
-  mutate(timestamp = as.POSIXct(strptime(timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC"),
-         year = format(as.POSIXct(timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y"),
-         id_year = paste(id,year,sep="_"),
-         case_ = as.numeric(case_))
-colnames(three_teens) <- colnames(ssfdata)
-ssfdata <- rbind(ssfdata,three_teens)
-
-ones <- read.csv("100s.60.30-7503523961484004456.csv",stringsAsFactors = F, header = T)
-twos <- read.csv("100s.120.30-5062111331872613040.csv",stringsAsFactors = F, header = T)
-threes <- read.csv("100s.180.30-2457406305713475310.csv",stringsAsFactors = F, header = T)
-fours <- read.csv("100s.240.30-8791886655423323226.csv",stringsAsFactors = F, header = T)
-ssfdata <- rbind(ones,twos,threes,fours) %>% 
-  mutate(timestamp = as.POSIXct(strptime(timestamp, format = "%Y-%m-%d %H:%M:%S"),tz = "UTC"),
-         year = format(as.POSIXct(timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y"),
-         id_year = paste(id,year,sep="_"),
-         case_ = as.numeric(case_))
-
 
 ## how many steps per day left?
 juveniles$ymd <- format(as.POSIXct(juveniles$timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y-%m-%d")
@@ -319,8 +300,10 @@ perday <- ssfdata %>%
 ## derive the cross and tail wind components
 colnames(ssfdata)[c(1,2,3,4,16,17,19,20,21)] <- c("lon1","lon2","lat1","lat2","u_wind","v_wind","orographic","thermal","sea_surface")
 
-
-ssfdata$heading <- NCEP.loxodrome.na(lat1 = ssfdata$lat1, lat2 = ssfdata$lat2, lon1 = ssfdata$lon1, lon2 = ssfdata$lon2)
+lons <- cbind(ssfdata$lon1,ssfdata$lon2)
+lats <- cbind(ssfdata$lat1,ssfdata$lat2)
+ssfdata$heading <- bearingRhumb(lons,lats)
+#ssfdata$heading <- NCEP.loxodrome.na(lon1 = ssfdata$long1, lon2 = ssfdata$long2, lat1 = ssfdata$lati1, lat2 = ssfdata$lati2)
 ssfdata$tail <- wind_support(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 ssfdata$cross <- cross_wind(u = ssfdata$u_wind,v = ssfdata$v_wind, heading = ssfdata$heading)
 ssfdata_saved <- ssfdata
@@ -670,8 +653,12 @@ pdf_combine(c("AICs_1.pdf", "AICs_2.pdf", "AICs_3.pdf", "AICs_4.pdf", "AICs_5.pd
 # The first data frame will be train (80% of the data)
 # The second will be test (20% of the data)
 
+load(validation_result.RData)
+
 library(groupdata2)
 library(cvms)
+library(doParallel)
+registerDoParallel(4)
 
 validation_data <- ssfdata %>% select(id,case_,year,burst_,step_id_,id_year_burst_step,scaled_tail,scaled_cross,scaled_thermal)
 
@@ -685,20 +672,16 @@ data_partitioned <- partition(
   list_out = T
 )
 
-train_data <- data_partitioned[which(data_partitioned$.partitions == 1),]
-test_data <- data_partitioned[which(data_partitioned$.partitions == 2),]
-#train_data <- data_partitioned[[1]]
-#test_data <- data_partitioned[[2]]
 
 # Validate a model
 # Gaussian
 valid_tibble <- validate(
-  train_data,
-  test_data = test_data,
+  data_partitioned,
   formulas = "case_ ~ scaled_tail + scaled_cross + scaled_thermal + strata(step_id_)",
   family = "gaussian",
   REML = FALSE
 )
+save(valid_tibble, file ="validation_result.RData")
 
 #############################################################################################
 
@@ -782,7 +765,7 @@ plot_data2 <- rbind(tail_coefs2, cross_coefs2)
 #############################################################################################
 
 ## create a scatterplot showing each individual coef/year and connecting paths
-tail_plot_data <- plot_data3_rm[plot_data3_rm$var == "Wind support",]
+tail_plot_data <- plot_data3[plot_data3$var == "Wind support",]
 tail_dots <- ggplot(tail_plot_data, aes(x=Migration, y=ssf_coefsTCt, color = id)) + 
   stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
   geom_jitter(aes(fill=id), size=2, width=0.2) +
@@ -790,7 +773,7 @@ tail_dots <- ggplot(tail_plot_data, aes(x=Migration, y=ssf_coefsTCt, color = id)
   labs(title = "Wind support", x="Migration", y = "Coefficients") +
   geom_hline(yintercept = 0) +
   theme(legend.position = "none") #+facet_wrap(vars(var))
-cross_plot_data <- plot_data3_rm[plot_data3_rm$var == "Crosswind",]
+cross_plot_data <- plot_data3[plot_data3$var == "Crosswind",]
 cross_dots <- ggplot(cross_plot_data, aes(x=Migration, y=ssf_coefsTCt, color = id)) + 
   stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
   geom_jitter(aes(fill=id), size=2, width=0.2) +
@@ -798,7 +781,7 @@ cross_dots <- ggplot(cross_plot_data, aes(x=Migration, y=ssf_coefsTCt, color = i
   labs(title = "Crosswind", x="Migration", y = "Coefficients") +
   geom_hline(yintercept = 0) +
   theme(legend.position = "none") #+facet_wrap(vars(var))
-thermal_plot_data <- plot_data3_rm[plot_data3_rm$var == "Thermal uplift",]
+thermal_plot_data <- plot_data3[plot_data3$var == "Thermal uplift",]
 thermal_dots <- ggplot(thermal_plot_data, aes(x=Migration, y=ssf_coefsTCt, color = id)) + 
   stat_summary(fun=median, geom="point", shape=18,size=3, color="black") +
   geom_jitter(aes(fill=id), size=2, width=0.2) +
