@@ -4,7 +4,7 @@
 
 ## set working directory and load required packages
 setwd("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf")
-HBNM_packs <- c("lubridate", "modelr", "sf", "move", "ggpubr", "RNCEP", "mapview","tidyverse","viridis","hrbrthemes","patchwork", "groupdata2","cvms")
+HBNM_packs <- c("lubridate", "modelr", "survival", "move", "ggpubr", "RNCEP", "mapview","tidyverse","viridis","hrbrthemes","patchwork", "groupdata2","cvms")
 lapply(HBNM_packs, require, character.only = TRUE)
 
 # import required functions
@@ -125,10 +125,10 @@ modeling_data <- annotated_data %>% filter(#id != "Jouko" & # these never seem t
                                           id_year != "Tiina_2012" & id_year != "Tiina_2013"& # remove these for unknown age adults
                                           id_year != "Mohammed_2019") # remove these for thermal uplift issues
 
-first_migration <- modeling_data[which(modeling_data$Migration == 1),]
+first_migration <- modeling_data[which(modeling_data$Migration == "1"),]
 adult_migration <- modeling_data[which(modeling_data$Migration == "5 +"),]
 
-clogit_results <- modeling_data %>% 
+clogit_results <- adult_migration %>% 
   group_by(Migration) %>% 
   nest() %>% 
   mutate(modelTCt = purrr::map(data, modelTCt),
@@ -145,6 +145,8 @@ randomization_dist <- permute(first_migration, no.perm, case_, .id = "permutatio
 
 # extract coefficients
 models <- purrr::map(randomization_dist$perm, modelTCt)
+#load("100_permutations_1A.RData")
+#load("100_permutations_5A.RData")
 glanced <- purrr::map_df(models, broom::glance, .id = "permutation")
 coefficients <- purrr::map(models, coef)
 coefficients <- purrr::map_df(coefficients, broom::tidy, .id = "permutation")
@@ -168,7 +170,7 @@ first_tail <- ggplot(data=tail_coefs, aes(x)) +
   geom_vline(aes(xintercept=clogit_results$coefsTCt[3]),
              color="red", size=1) +
   geom_histogram(fill="black", bins = no.bin) +
-  labs(title = "Wind support", x="Coefficient value", y="Frequency") +
+  labs(title = "Wind support (p = 0.22)", x="Coefficient value", y="Frequency") +
   theme_classic()
 
 cross_coefs <- coefficients %>% filter(names=="scaled_cross")
@@ -176,7 +178,7 @@ first_cross <- ggplot(data=cross_coefs, aes(x)) +
   geom_vline(aes(xintercept=clogit_results$coefsTCt[1]),
              color="red", size=1) +
   geom_histogram(fill="black", bins = no.bin) +
-  labs(title = "Crosswind", x="Coefficient value", y="Frequency") +
+  labs(title = "Crosswind (p = 0.04)", x="Coefficient value", y="Frequency") +
   theme_classic()
 
 thermal_coefs <- coefficients %>% filter(names=="scaled_thermal")
@@ -184,7 +186,8 @@ first_thermal <- ggplot(data=thermal_coefs, aes(x)) +
   geom_vline(aes(xintercept=clogit_results$coefsTCt[2]),
              color="red", size=1) +
   geom_histogram(fill="black", bins = no.bin) +
-  labs(title = "Thermal uplift", x="Coefficient value", y="Frequency") +
+  labs(title = "Thermal uplift (p = 0) ", x="Coefficient value", y="Frequency") +
   theme_classic()
 
 ggarrange(first_tail, first_cross, first_thermal,ncol=3, nrow=1, legend = "none")
+############################################################################################
