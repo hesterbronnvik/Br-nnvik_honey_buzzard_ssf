@@ -3,7 +3,7 @@
 
 # set working directory and load required packages
 setwd("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf")
-ssf_packs <- c("lubridate", "amt", "purrr","move", "mapview","ggpubr","survival", "tidyverse")
+ssf_packs <- c("lubridate", "amt", "purrr","move", "mapview", "ggpubr", "survival", "sjPlot", "MASS", "tidyverse")
 lapply(ssf_packs, require, character.only = TRUE)
 
 # import required functions
@@ -277,8 +277,7 @@ ssfdata <- ssfdata %>%
          scaled_thermal = as.numeric(scale(thermal, center = T, scale = T)),)
 #############################################################################################
 
-
-### Build the models
+### Build the model
 #############################################################################################
 # build the model function
 ssf_modelTCt <- function(df) {
@@ -302,7 +301,6 @@ SSF_results <- ssf_modeling_data %>%
          AIC_TCt = map_dbl(ssf_modelTCt, ~AIC(.)))
 
 #############################################################################################
-
 
 ## Extract the model coefficients for plotting
 ##########################################################################################
@@ -382,8 +380,7 @@ plot_data$Migration[which(plot_data$id_year == "Annika_2015" | # add year 5 info
 plot_data$Migration[which(is.na(plot_data$Migration))] <- "1" # everything else is year 1
 #############################################################################################
 
-
-### Plot the wind coefficients
+### Plot the coefficients
 #############################################################################################
 ## create a scatterplot showing each individual coef/year and connecting paths
 
@@ -440,4 +437,254 @@ heat_plot <- ggplot(heat_plot_data, aes(x=Migration, y=ssf_coefsTCt)) +
   theme(legend.position = "none")
 
 ggarrange(tail_plot, cross_plot, heat_plot, ncol=3, nrow=1, legend = "none")
-###################################################################################################################
+#############################################################################################
+
+### Model selection
+#############################################################################################
+## For all-possible-regressions model selection, build 6 more model functions to cover all combinations of variables
+
+# three with two variables
+ssf_modelTC <- function(df) {
+  fit_clogit(case_ ~ scaled_cross + scaled_tail + strata(step_id_), data = df)
+}
+ssf_modelTt <- function(df) {
+  fit_clogit(case_ ~ scaled_tail + scaled_thermal + strata(step_id_), data = df)
+}
+ssf_modelCt <- function(df) {
+  fit_clogit(case_ ~ scaled_cross + scaled_thermal + strata(step_id_), data = df)
+}
+
+# and three with single variables
+ssf_modelC <- function(df) {
+  fit_clogit(case_ ~ scaled_cross + strata(step_id_), data = df)
+}
+ssf_modelT <- function(df) {
+  fit_clogit(case_ ~ scaled_tail + strata(step_id_), data = df)
+}
+ssf_modelt <- function(df) {
+  fit_clogit(case_ ~ scaled_thermal + strata(step_id_), data = df)
+}
+
+# model the data again using these models
+SSF_selections <- ssf_modeling_data %>% 
+  group_by(id,year) %>% 
+  nest() %>% 
+  mutate(ssf_modelTCt = purrr::map(data, ssf_modelTCt), # add each model as a column of lists 
+         ssf_modelTC = purrr::map(data, ssf_modelTC),
+         ssf_modelCt = purrr::map(data, ssf_modelCt),
+         ssf_modelTt = purrr::map(data, ssf_modelTt),
+         ssf_modelC = purrr::map(data, ssf_modelC),
+         ssf_modelT = purrr::map(data, ssf_modelT),
+         ssf_modelt = purrr::map(data, ssf_modelt),
+         tail_cross_thermal = map_dbl(ssf_modelTCt, ~AIC(.)), # extract AIC for each model
+         tail_cross = map_dbl(ssf_modelTC, ~AIC(.)),
+         cross_thermal = map_dbl(ssf_modelCt, ~AIC(.)),
+         tail_thermal = map_dbl(ssf_modelTt, ~AIC(.)),
+         cross = map_dbl(ssf_modelC, ~AIC(.)),
+         tail = map_dbl(ssf_modelT, ~AIC(.)),
+         thermal = map_dbl(ssf_modelt, ~AIC(.)))
+
+
+## Extract deltaAICs
+
+# assign migrations so that AICs can be taken for each
+## add the life stage and migration number
+SSF_selections$id_year <- paste(SSF_selections$id,SSF_selections$year,sep="_")
+SSF_selections$stage <- NA # create an empty column to store values
+SSF_selections$stage[which(SSF_selections$id == "Aarne" | 
+                             SSF_selections$id == "Annika" |
+                             SSF_selections$id == "Jari" |
+                             SSF_selections$id == "Johannes" |
+                             SSF_selections$id == "Jouko" |
+                             SSF_selections$id == "Mikko" |
+                             SSF_selections$id == "Paivi" |
+                             SSF_selections$id == "Tiina" |
+                             SSF_selections$id == "Kari")] <- "adult" # label individuals of unknown age
+SSF_selections$stage[which(is.na(SSF_selections$stage))] <- "juvenile" # label individuals tagged as fledglings
+
+# add the number of each migration
+SSF_selections$Migration <- NA 
+SSF_selections$Migration[which(SSF_selections$id_year == "Jaana_2013" | # add year 2 info
+                                 SSF_selections$id_year == "Lars_2013" | 
+                                 SSF_selections$id_year == "Mohammed_2018" | 
+                                 SSF_selections$id_year == "Senta_2015" | 
+                                 SSF_selections$id_year == "Valentin_2015" | 
+                                 SSF_selections$id_year == "Aarne_2013" |
+                                 SSF_selections$id_year == "Annika_2012" |
+                                 SSF_selections$id_year == "Jari_2013" | 
+                                 SSF_selections$id_year == "Johannes_2014" | 
+                                 SSF_selections$id_year == "Jouko_2012" |
+                                 SSF_selections$id_year == "Kari_2012" |
+                                 SSF_selections$id_year == "Paivi_2014" |
+                                 SSF_selections$id_year == "Mikko_2012" |
+                                 SSF_selections$id_year == "Tiina_2012")] <- "2"
+
+SSF_selections$Migration[which(SSF_selections$id_year == "Jaana_2014" | # add year 3 info
+                                 SSF_selections$id_year == "Lars_2014" | 
+                                 SSF_selections$id_year == "Senta_2016" |
+                                 SSF_selections$id_year == "Annika_2013" | 
+                                 SSF_selections$id_year == "Jari_2014" | 
+                                 SSF_selections$id_year == "Johannes_2015" |
+                                 SSF_selections$id_year == "Jouko_2013" |
+                                 SSF_selections$id_year == "Mikko_2013" | # missing
+                                 SSF_selections$id_year == "Paivi_2015" |
+                                 SSF_selections$id_year == "Mohammed_2019" |
+                                 SSF_selections$id_year == "Tiina_2013")] <- "3"
+
+SSF_selections$Migration[which(SSF_selections$id_year == "Lars_2015" | # add year 4 info
+                                 SSF_selections$id_year == "Senta_2017" |
+                                 SSF_selections$id_year == "Annika_2014" |
+                                 SSF_selections$id_year == "Jouko_2014" |
+                                 SSF_selections$id_year == "Mikko_2014" |
+                                 SSF_selections$id_year == "Paivi_2016" |
+                                 SSF_selections$id_year == "Tiina_2014")] <- "4"
+
+SSF_selections$Migration[which(SSF_selections$id_year == "Annika_2015" | # add year 5 info
+                                 SSF_selections$id_year == "Jouko_2015" | 
+                                 SSF_selections$id_year == "Mikko_2015" | 
+                                 SSF_selections$id_year == "Paivi_2017" | 
+                                 SSF_selections$id_year == "Tiina_2015")] <- "5" 
+SSF_selections$Migration[which(is.na(SSF_selections$Migration))] <- "1" # everything else is year 1
+
+## calculate the average AIC for each migration
+# begin by selecting which data to use (in this case excluding results for models of individuals of unknown age)
+SSF_AICs <- SSF_selections %>% filter(stage == "juvenile" | stage == "adult" & Migration == "5")
+
+# separate the migrations and calculate the average for each
+SSF_AICs <- lapply(split(SSF_selections, SSF_selections$Migration), function(x){
+  colMeans(x[11:16])
+}) %>% 
+  reduce(rbind) %>% 
+  t() 
+colnames(SSF_AICs) <- c("first_migration", "second_migration", "third_migration", "fourth_migration","adult_migration")
+
+# set the order to display models in
+model_order <- c("tail_cross_thermal", "tail_cross", "tail_thermal", "cross_thermal", "tail", "cross", "thermal")
+
+# calculate the deltaAICs and order
+SSF_AICs <- as.data.frame(SSF_AICs) %>%
+  rownames_to_column() %>% 
+  rename(variables = rowname) %>% 
+  mutate(deltaAIC_1 = first_migration - min(first_migration),# calculate the change in AIC from the best model for each migration
+         deltaAIC_2 = second_migration - min(second_migration),
+         deltaAIC_3 = third_migration - min(third_migration),
+         deltaAIC_4 = fourth_migration - min(fourth_migration),
+         deltaAIC_5 = adult_migration - min(adult_migration))
+
+# export the table as a .doc file
+tab_df(SSF_AICs,
+       alternate.rows = T, # this colors the rows
+       title = "Model selection",
+       file = "SSF_AICs.doc")
+
+## For stepwise selection, separate the migrations and run each
+
+## again, add the life stage and migration number
+ssf_modeling_data$stage <- NA # create an empty column to store values
+ssf_modeling_data$stage[which(ssf_modeling_data$id == "Aarne" | 
+                                ssf_modeling_data$id == "Annika" |
+                                ssf_modeling_data$id == "Jari" |
+                                ssf_modeling_data$id == "Johannes" |
+                                ssf_modeling_data$id == "Jouko" |
+                                ssf_modeling_data$id == "Mikko" |
+                                ssf_modeling_data$id == "Paivi" |
+                                ssf_modeling_data$id == "Tiina" |
+                                ssf_modeling_data$id == "Kari")] <- "adult" # label individuals of unknown age
+ssf_modeling_data$stage[which(is.na(ssf_modeling_data$stage))] <- "juvenile" # label individuals tagged as fledglings
+
+# add the number of each migration
+ssf_modeling_data$Migration <- NA 
+ssf_modeling_data$Migration[which(ssf_modeling_data$id_year == "Jaana_2013" | # add year 2 info
+                                    ssf_modeling_data$id_year == "Lars_2013" | 
+                                    ssf_modeling_data$id_year == "Mohammed_2018" | 
+                                    ssf_modeling_data$id_year == "Senta_2015" | 
+                                    ssf_modeling_data$id_year == "Valentin_2015" | 
+                                    ssf_modeling_data$id_year == "Aarne_2013" |
+                                    ssf_modeling_data$id_year == "Annika_2012" |
+                                    ssf_modeling_data$id_year == "Jari_2013" | 
+                                    ssf_modeling_data$id_year == "Johannes_2014" | 
+                                    ssf_modeling_data$id_year == "Jouko_2012" |
+                                    ssf_modeling_data$id_year == "Kari_2012" |
+                                    ssf_modeling_data$id_year == "Paivi_2014" |
+                                    ssf_modeling_data$id_year == "Mikko_2012" |
+                                    ssf_modeling_data$id_year == "Tiina_2012")] <- "2"
+
+ssf_modeling_data$Migration[which(ssf_modeling_data$id_year == "Jaana_2014" | # add year 3 info
+                                    ssf_modeling_data$id_year == "Lars_2014" | 
+                                    ssf_modeling_data$id_year == "Senta_2016" |
+                                    ssf_modeling_data$id_year == "Annika_2013" | 
+                                    ssf_modeling_data$id_year == "Jari_2014" | 
+                                    ssf_modeling_data$id_year == "Johannes_2015" |
+                                    ssf_modeling_data$id_year == "Jouko_2013" |
+                                    ssf_modeling_data$id_year == "Mikko_2013" | # missing
+                                    ssf_modeling_data$id_year == "Paivi_2015" |
+                                    ssf_modeling_data$id_year == "Mohammed_2019" |
+                                    ssf_modeling_data$id_year == "Tiina_2013")] <- "3"
+
+ssf_modeling_data$Migration[which(ssf_modeling_data$id_year == "Lars_2015" | # add year 4 info
+                                    ssf_modeling_data$id_year == "Senta_2017" |
+                                    ssf_modeling_data$id_year == "Annika_2014" |
+                                    ssf_modeling_data$id_year == "Jouko_2014" |
+                                    ssf_modeling_data$id_year == "Mikko_2014" |
+                                    ssf_modeling_data$id_year == "Paivi_2016" |
+                                    ssf_modeling_data$id_year == "Tiina_2014")] <- "4"
+
+ssf_modeling_data$Migration[which(ssf_modeling_data$id_year == "Annika_2015" | # add year 5 info
+                                    ssf_modeling_data$id_year == "Jouko_2015" | 
+                                    ssf_modeling_data$id_year == "Mikko_2015" | 
+                                    ssf_modeling_data$id_year == "Paivi_2017" | 
+                                    ssf_modeling_data$id_year == "Tiina_2015")] <- "5" 
+ssf_modeling_data$Migration[which(is.na(ssf_modeling_data$Migration))] <- "1" # everything else is year 1
+
+# select which data to use (in this case excluding individuals of unknown age)
+ssf_modeling_data <- ssf_modeling_data %>% filter(stage == "adult" & Migration == "5" | stage == "juvenile") 
+
+# using only data from each migration, model with all variables, then run stepwise selection
+first_data <- ssf_modeling_data %>% filter(Migration == "1") %>% dplyr::select(case_,scaled_tail,scaled_cross,scaled_thermal,step_id_)
+first_model <- clogit(case_ ~ scaled_tail + scaled_cross + scaled_thermal + strata(step_id_), data = first_data)
+stepAIC(first_model)
+
+second_data <- ssf_modeling_data %>% filter(Migration == "2") %>% dplyr::select(case_,scaled_tail,scaled_cross,scaled_thermal,step_id_)
+second_model <- clogit(case_ ~ scaled_tail + scaled_cross + scaled_thermal + strata(step_id_), data = second_data)
+stepAIC(second_model)
+
+third_data <- ssf_modeling_data %>% filter(Migration == "3") %>% dplyr::select(case_,scaled_tail,scaled_cross,scaled_thermal,step_id_)
+third_model <- clogit(case_ ~ scaled_tail + scaled_cross + scaled_thermal + strata(step_id_), data = third_data)
+stepAIC(third_model)
+
+fourth_data <- ssf_modeling_data %>% filter(Migration == "4") %>% dplyr::select(case_,scaled_tail,scaled_cross,scaled_thermal,step_id_)
+fourth_model <- clogit(case_ ~ scaled_tail + scaled_cross + scaled_thermal  + strata(step_id_), data = fourth_data)
+stepAIC(fourth_model)
+
+fifth_data <- ssf_modeling_data %>% filter(Migration == "5") %>% dplyr::select(case_,scaled_tail,scaled_cross,scaled_thermal,step_id_) %>% filter(!is.na(scaled_tail))
+fifth_model <- clogit(case_ ~ scaled_tail + scaled_cross + scaled_thermal  + strata(step_id_), data = fifth_data)
+stepAIC(fifth_model)
+##########################################################################################
+
+### Cross-validation
+#############################################################################################
+# prune the data set to reduce its size
+validation_data <- ssf_modeling_data %>% dplyr::select(id,case_,year,burst_,step_id_,id_year_burst_step,scaled_tail,scaled_cross,scaled_thermal)
+
+# group the data by step so that partitioning happens on steps rather than slicing them
+validation_data <- validation_data %>% group_by(id_year_burst_step) %>% 
+  mutate(id_grouping = as.factor(id))
+
+# partition data in an 80:20 split
+data_partitioned <- partition(
+  validation_data,
+  p = 0.8,
+  cat_col = "case_",
+  list_out = T)
+
+
+# fit the model to the training set and then calculate RMSE
+valid_tibble <- validate(
+  data_partitioned,
+  formulas = "case_ ~ scaled_tail + scaled_cross + scaled_thermal + strata(step_id_)",
+  family = "binomial", # use binary classification 
+  REML = FALSE)
+
+# save the result for later because it takes a long time to generate it
+#save(valid_tibble, file ="validation_result.RData")
+#############################################################################################
