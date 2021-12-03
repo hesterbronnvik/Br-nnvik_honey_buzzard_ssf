@@ -1,0 +1,869 @@
+---
+title: "Appendix: Route selection analyses"
+author:
+- Hester Brønnvik  
+- Department of Migration, Max Planck Institute of Animal Behavior, Radolfzell, Germany  
+- Department of Biology, University of Konstanz, Konstanz, Germany
+output: 
+  pdf_document:
+    highlight: haddock
+  
+always_allow_html: true
+fontsize: 11
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+## Performing analyses using Step Selection Functions
+
+Step-selection functions model animal movement as a series of discrete steps between consecutive locations. Each observed step is matched with alternative steps, which allows comparisons of the observed locations to alternative, available ones. Here, we generate these alternative steps and available locations and compare the available airflow. 
+
+Step-selections functions define availability with three criteria: the previous location, the time between consecutive locations, and the characteristics of an individual's movement. First, we have to clean the data and process them into tracks. Then, we have to re-sample them so that there are consistent time intervals between locations. Finally, we have to extract the step lengths and turn angles for each individual and generate distributions of what is possible. 
+
+Once we have generated the available locations, we can label them with environmental information using Movebank's Env-DATA service. The last step is to ask how these environmental factors predict space use, which we do by fitting conditional logistic regressions. 
+
+### 1. Prepare the environment
+
+The first step is to make sure that we have all of the packages and functions that we need. Here, we will use the "amt" package to make and process our tracks and the "survival" package to model our data. We need several additional packages for formatting, mapping, and ease.
+
+----
+```{r libraries, message=FALSE, warning=FALSE, results='hide'}
+#set a working directory and load required packages
+setwd("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf")
+mypath <- paste0(getwd(),"/")
+ssf_packs <- c("lubridate", "amt", "purrr", "move", "mapview", "ggpubr", "survival",
+               "sjPlot", "MASS", "modelr", "mosaic", "tidyverse")
+lapply(ssf_packs, require, character.only = TRUE)
+
+```
+
+```{r functions, message=FALSE, warning=FALSE, results='hide'}
+#import required functions
+NCEP.loxodrome.na <- function (lat1, lat2, lon1, lon2) {
+  deg2rad <- pi/180
+  acot <- function(x) {
+    return(atan(1/x))
+  }
+  lat1 <- deg2rad * lat1
+  lat2 <- deg2rad * lat2
+  lon1 <- deg2rad * lon1
+  lon2 <- deg2rad * lon2
+  deltaLon <- lon2 - lon1
+  pi4 <- pi/4
+  Sig1 <- log(tan(pi4 + lat1/2))
+  Sig2 <- log(tan(pi4 + lat2/2))
+  deltaSig <- Sig2 - Sig1
+  if (deltaLon == 0 && deltaSig > 0) {
+    head <- 0
+  }
+  else if (deltaLon == 0 && deltaSig < 0) {
+    head <- 180
+  }
+  else if (deltaSig == 0 && deltaLon > 0) {
+    head <- 90
+  }
+  else if (deltaSig == 0 && deltaLon < 0) {
+    head <- 270
+  }
+  else if (deltaSig < 0 && deltaLon < 0) {
+    head <- acot(deltaSig/deltaLon) * 180/pi + 180
+  }
+  else if (deltaSig < 0 && deltaLon > 0) {
+    head <- acot(deltaSig/deltaLon) * 180/pi + 180
+  }
+  else if (deltaSig > 0 && deltaLon > 0) {
+    head <- acot(deltaSig/deltaLon) * 180/pi
+  }
+  else if (deltaSig > 0 && deltaLon < 0) {
+    head <- acot(deltaSig/deltaLon) * 180/pi + 360
+  }
+  else {
+    head <-NA}
+  return(head)
+}
+source(paste0(mypath, "wind_support_Kami.R"))
+
+```
+----
+
+Next, we set some criteria for building the tracks. The step number determines how many alternative steps are generated for each observed one. The tolerance determines how many minutes around a fix are allowed in order to consider it a next step (eg. a step is the distance traveled in 2 hours +/- 15 minutes). Finally, the CRS is the coordinate reference system, defining the map projection for the mk_track function. Here we have to inform R that our data are measured in degrees rather than in meters. 
+
+----
+```{r criteria}
+# set criteria for tracks
+stepNumber <- 100 # random steps
+toleranceLength <- 15 # tolerance in minutes
+wgs <- CRS("+proj=longlat +datum=WGS84 +no_defs") # map projection
+
+```
+----
+
+### 2. Prepare data for Movebank's environmental data annotation
+
+In order to get the data in the right format, we select only the reads from autumn migrations and clean them. We need to remove any duplicated reads and any times when the birds were not moving. We also need to map the data to see whether there are any incomplete records, and to remove those records if we find any. Then we need to separate the data so that individuals that were sampled at different rates are analyzed separately.
+
+----
+```{r data}
+# retrieve the full data set
+full_data <- read.csv(paste0(mypath,"original_data/full_buzz_set.csv"),stringsAsFactors = F, header = T)
+
+# reformat the time stamps
+full_data$timestamp <- as.POSIXct(strptime(full_data$dt, format = "%Y-%m-%d %H:%M:%S"),
+                                  tz = "UTC")
+
+# select the autumn migrations
+all_autumns <- full_data[grep("autumn", full_data$phase),]
+
+# find and remove duplicate observations
+doubles <- all_autumns %>% dplyr::select(long, lat, name, timestamp) %>%
+  duplicated
+sum(doubles) # 59 duplicates
+all_autumns <- all_autumns[doubles != TRUE,]
+
+# get the 204 reads when the birds did not move and remove them from the data
+resting_reads <- read.csv(paste0(mypath,"resting.csv"), stringsAsFactors = F)
+all_autumns <- all_autumns %>% mutate(id_ts = paste(name,timestamp, sep="_")) %>% 
+  filter(!id_ts %in% resting_reads$id_ts)
+
+# order all the data by timestamp
+all_autumns <- all_autumns %>%
+  arrange(timestamp)
+
+# remove birds of unknown age with fewer than 4 tracked autumn migrations
+all_autumns <- all_autumns %>% filter(all_autumns$name != "Aarne" &
+                         all_autumns$name != "Jari" &
+                         all_autumns$name != "Johannes" &
+                         all_autumns$name != "Kari")
+
+# create a unique identifier for each migratory journey
+all_autumns$id_year <- paste(all_autumns$name, all_autumns$yr, sep="_")
+
+# make simple plots of lat/long to check for outliers
+ggplot(all_autumns, aes(x=long, y=lat, color=as.factor(name))) + geom_point() +
+  theme(legend.position = "none")
+ggplot(all_autumns, aes(x=long, y=lat)) + geom_point()+ facet_wrap(~name, scales="free")
+
+# make a map of individual tracks
+data_sp <- all_autumns # store the data, then create a spatial object for plotting
+coordinates(data_sp) <- ~ long + lat # set coordinates
+proj4string(data_sp) <- wgs # set projection
+mapView(data_sp, zcol = "id_year", burst = F, cex = 3, color = rainbow) # plot on a map
+
+# some individuals do not survive their first trip and have to be removed from the data
+all_autumns <- all_autumns %>% filter(name != "Emma" &
+                                      name != "Lisa" &
+                                      name != "Miikka" &
+                                      name != "Per" &
+                                      name != "Sven" &
+                            # others died en route later in life and must also be removed
+                                      id_year != "Annika_2015" & 
+                                      id_year != "Jouko_2015" & 
+                                      id_year != "Paivi_2017" &
+                                      id_year != "Senta_2017")
+
+# the data need to be re-sampled at different rates label them 
+# with these rates in minutes so that each can be processed individually.
+all_autumns$sample_rate <- NA
+
+# the individuals with 1 hour sampling rates
+all_autumns$sample_rate[which(all_autumns$name == "Anni" | 
+                              all_autumns$name == "Viljo")] <- 60
+
+# the individuals with 2 hour sampling rates
+all_autumns$sample_rate[which(all_autumns$name == "Edit" | all_autumns$name == "Julia" |
+                              all_autumns$name == "Matti"| all_autumns$name == "Ulla" |
+                              all_autumns$name == "Aida" | all_autumns$name == "Ella" |
+                              all_autumns$name == "Heidi" | all_autumns$name == "Kirsi" |
+                              all_autumns$name == "Gilda" | 
+                              all_autumns$name == "Valentin")] <- 120
+
+# the individuals with 3 hour sampling rates
+all_autumns$sample_rate[which(all_autumns$name == "Mohammed")] <- 180
+
+# the individuals with 4 hour sampling rates
+all_autumns$sample_rate[which(all_autumns$name == "Annika" | all_autumns$name == "Jaana"|
+                              all_autumns$name == "Lars"| all_autumns$name == "Piff"| 
+                              all_autumns$name == "Puff" | all_autumns$name == "Roosa"|
+                              all_autumns$name == "Senta"| all_autumns$name == "Tor" |
+                              all_autumns$name == "Tiina" |all_autumns$name == "Jouko" |
+                              all_autumns$name == "Mikko" |all_autumns$name == "Paivi" |
+                              all_autumns$name == "Hans" | all_autumns$name == "Venus" |
+                              all_autumns$name == "Rudolf")] <- 240
+```
+----
+
+Using the amt package, we can create track objects. These are then re-sampled to a given step length. Steps have to be of consistent times because the parameters of the models are scale dependent and will vary with $\Delta$t. By re-sampling, we burst the tracks. A burst is a track segment containing fixes separated by the given step length. We can then create randomized locations as part of these bursts.
+
+----
+```{r build-tracks, message=FALSE, warning=FALSE, results='hide'}
+# build tracks at each rate
+
+autumn_track <- data.frame()
+
+for (i in sort(unique(all_autumns$sample_rate))) {
+  # select data of the given sampling rate
+  temp_rdata <- all_autumns[which(all_autumns$sample_rate == i),]
+  for (j in unique(temp_rdata$id_year)) {
+    # select data for the given track
+    temp_idata <- temp_rdata[which(temp_rdata$id_year == j),]
+  # make the track  
+  trk <- mk_track(temp_idata,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs)
+  # resample to a consistent time between steps
+  trk <- track_resample(trk, rate = minutes(i), tolerance = minutes(toleranceLength))
+  # remove bursts with fewer than three re-locations so that turn angle can be calculated
+  trk <- filter_min_n_burst(trk, 3)
+  # burst steps
+  burst <- steps_by_burst(trk, keep_cols = "start")
+  # create random steps using fitted gamma and von Mises distributions and append
+  rnd_stps <- burst %>% random_steps(n_control = stepNumber)
+  # save
+  autumn_track <- rbind(autumn_track,rnd_stps)
+  # and signal
+  print(paste0("Successfully created random steps for track ", j))
+  }
+}
+
+# compare the step lengths and turn angles for observed and random steps
+obs_sl <- autumn_track[autumn_track$case_ == TRUE,] %>% 
+  ggplot(aes(sl_, fill = factor(id))) + ggtitle("Observed") + geom_density(alpha = 0.4) + theme_minimal()
+obs_ta <- autumn_track[autumn_track$case_ == TRUE,] %>% 
+  ggplot(aes(ta_, fill = factor(id))) + ggtitle("Observed") +
+  geom_density(alpha = 0.4) + 
+  labs(x = "Turn angle (radians)", y = "Density") + 
+  theme_minimal()
+rand_sl <- autumn_track[autumn_track$case_ == FALSE,] %>%  
+  ggplot(aes(sl_, fill = factor(id))) + ggtitle("Alternative") + geom_density(alpha = 0.4) + theme_minimal()
+rand_ta <- autumn_track[autumn_track$case_ == FALSE,] %>% 
+  ggplot(aes(ta_, fill = factor(id))) + ggtitle("Alternative") +
+  geom_density(alpha = 0.4) + 
+  labs(x = "Turn angle (radians)", y = "Density") + 
+  theme_minimal()
+ggarrange(obs_sl, rand_sl, obs_ta, rand_ta, ncol=2, nrow=2, legend = "none")
+
+
+```
+----
+
+In order to calculate crosswind and tailwind components of the north/south and east/west winds that we will get from Movebank annotation, we need to calculate the direction of movement (loxodrome angle of travel) between locations. This is best done before annotation to avoid truncation of smaller values in the locations during file export.
+
+----
+```{r headings}
+# calculate directions of movement between locations for each step
+autumn_track <- autumn_track %>% rowwise() %>% 
+  mutate(heading = NCEP.loxodrome.na(y1_, y2_, x1_, x2_)) %>% 
+  ungroup()
+```
+----
+
+Now we only need to conform to column name and file size specifications, then export the prepared data and send it to the Env-DATA service.
+
+----
+```{r export}
+# select the end point for each step
+names(autumn_track)[c(2,4)] <-c("location-long", "location-lat") 
+# select the start time for each step
+autumn_track$timestamp<-autumn_track$t1_ 
+autumn_track$timestamp <- paste0(autumn_track$timestamp,".000" )
+
+# split the data to conform to Movebank's file size limits
+half1 <- autumn_track[1:(0.5*nrow(autumn_track)),]
+half2 <- autumn_track[(0.5*nrow(autumn_track)+1):nrow(autumn_track),]
+
+# export each file for Movebank annotation
+write.csv(half1, paste0("HB1_",Sys.Date(),".csv"), row.names = FALSE)
+write.csv(half2, paste0("HB2_",Sys.Date(),".csv"), row.names = FALSE)
+```
+----
+
+### 3. Prepare data for modeling
+
+Step-selection analyses use conditional logistic regressions to predict whether a location is used or unused based on environmental conditions. Once we have our files returned from Movebank's Env-DATA service, we can process the annotated data for modeling. Using the directions we calculated above, we can derive the crosswind and tailwind components from the wind data. Our third variable of interest is the vertical velocity of pressure, which proxies uplift and subsidence. Because pressure is lower with increasing altitude, negative vertical velocity values indicate uplift. 
+
+----
+```{r import, results='hide', message=FALSE, warning=FALSE}
+# read in the annotated data
+half1 <- read.csv(paste0(mypath,"HB1_4433398109146553161.csv"),
+                  stringsAsFactors = F, header = T)
+half2 <- read.csv(paste0(mypath,"HB2_4573417134914709132.csv"),
+                  stringsAsFactors = F, header = T)
+# and bind them into a single frame
+annotated_data <- rbind(half1,half2) %>%
+  # rename the columns to be more useful
+  rename(lon1 = x1_,
+         lat1 = y1_,
+         lon2 = location.long,
+         lat2 = location.lat,
+         u_wind = ECMWF.ERA5.PL.U.Wind,
+         v_wind = ECMWF.ERA5.PL.V.wind,
+         vertical_pressure = ECMWF.ERA5.PL.Pressure.Vertical.Velocity) %>% 
+  # then reformat the time and logical, and calculate wind support and crosswind
+  mutate(timestamp = as.POSIXct(strptime(timestamp, format = "%Y-%m-%d %H:%M:%S"),
+                                tz = "UTC"),
+         year = format(as.POSIXct(timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y"),
+         id_year = paste(id,year,sep="_"),
+         case_ = as.numeric(case_),
+         tail = wind_support(u_wind, v_wind, heading),
+         cross = cross_wind(u_wind, v_wind, heading))
+
+```
+----
+
+As a last step we standardize our predictors across the whole data set. This means that all of our data have the same mean and variance, and therefore allows us to compare the coefficients of different models. We use "scale" to divide each value by its column's standard deviation and subtract the mean. We also take the absolute value of the crosswind variable because sign signifies compass direction, but we are only interested in the strength of the wind. 
+
+----
+```{r standardize}
+#standardize the predictors
+annotated_data <- annotated_data %>% 
+  mutate(scaled_cross = abs(as.numeric(scale(cross, center = T, scale = T))), 
+         scaled_tail = as.numeric(scale(tail, center = T, scale = T)),
+         scaled_vertical = as.numeric(scale(vertical_pressure, center = T, scale = T)),)
+
+```
+----
+
+### 4. Build the model
+
+We need to model each individual in each year separately, which means fitting as many models as there are tracks. We can do this quickly using nested lists if we first write our model as a function and then give it to the "purrr" package's "map" function.
+
+----
+```{r modeling}
+# write the model function
+modelTCV <- function(df) {
+  clogit(case_ ~ scaled_tail + scaled_cross + scaled_vertical + ta_ + sl_ + strata(step_id_), data = df)
+}
+#check how many true steps survived filtering
+print(annotated_data %>% group_by(id_year) %>% tally(case_ == 1), n= 70)
+
+# fit separate models for each journey, collect the coefficients, and calculate the AICs
+SSF_results <- annotated_data %>% 
+  group_by(id_year) %>% 
+  nest() %>% 
+  mutate(ssf_modelTCV = purrr::map(data, modelTCV),
+         ssf_coefsTCV = purrr::map(ssf_modelTCV, coef),
+         AIC_TCV = map_dbl(ssf_modelTCV, ~AIC(.)))
+
+```
+----
+
+### 5. Extract the model coefficients for plotting
+
+----
+```{r extraction}
+# flatten the coefficient column
+ssf_coefs <- unnest(SSF_results, ssf_coefsTCV)
+
+#the coefficients for each variable are now in a single column, group them by their identities
+tail_coefs <- do.call(rbind, lapply(unique(ssf_coefs$id_year),
+                      function(x){head(ssf_coefs[ssf_coefs$id_year == x,], 3)[1,]}))
+cross_coefs <- do.call(rbind, lapply(unique(ssf_coefs$id_year),
+                        function(x){head(ssf_coefs[ssf_coefs$id_year == x,], 3)[2,]}))
+lift_coefs <- do.call(rbind, lapply(unique(ssf_coefs$id_year),
+                        function(x){tail(ssf_coefs[ssf_coefs$id_year == x,], 3)[3,]}))
+
+#create a common label for the variables
+tail_coefs$var <- "Wind support"
+cross_coefs$var <- "Crosswind"
+lift_coefs$var <- "Vertical velocity"
+
+
+#bind them into a single object again with their identities appended
+plot_data <- rbind(tail_coefs, cross_coefs,lift_coefs)
+```
+----
+
+To plot data in groups, we add the life stage and migration number to each individual.
+
+----
+```{r id_year}
+#separate the id_year column so that stage is identified by individual
+plot_data <- separate(plot_data, col = "id_year", c("id", "year"), remove = F)
+plot_data$stage <- NA # create an empty column to store values
+plot_data$stage[which(plot_data$id == "Annika" |
+                         plot_data$id == "Jouko" |
+                         plot_data$id == "Mikko" |
+                         plot_data$id == "Paivi" |
+                         plot_data$id == "Tiina" )] <- "adult" # label individuals of unknown age
+plot_data$stage[which(is.na(plot_data$stage))] <- "juvenile" # label individuals tagged as fledglings
+
+#add the number of each migration
+plot_data$Migration <- NA 
+plot_data$Migration[which(plot_data$id_year == "Jaana_2013" | # add year 2 info
+                             plot_data$id_year == "Lars_2013" | 
+                             plot_data$id_year == "Mohammed_2018" | 
+                             plot_data$id_year == "Senta_2015" | 
+                             plot_data$id_year == "Valentin_2015" |
+                             plot_data$id_year == "Annika_2012" | 
+                             plot_data$id_year == "Jouko_2012" |
+                             plot_data$id_year == "Paivi_2014" |
+                             plot_data$id_year == "Mikko_2012" |
+                             plot_data$id_year == "Tiina_2012")] <- "2"
+
+plot_data$Migration[which(plot_data$id_year == "Jaana_2014" | # add year 3 info
+                             plot_data$id_year == "Lars_2014" | 
+                             plot_data$id_year == "Senta_2016" |
+                             plot_data$id_year == "Annika_2013" |
+                             plot_data$id_year == "Jouko_2013" |
+                             plot_data$id_year == "Mikko_2013" |
+                             plot_data$id_year == "Paivi_2015" |
+                             plot_data$id_year == "Mohammed_2019" |
+                             plot_data$id_year == "Tiina_2013")] <- "3"
+
+plot_data$Migration[which(plot_data$id_year == "Lars_2015" | # add year 4 info
+                             plot_data$id_year == "Mohammed_2020")] <- "4"
+
+plot_data$Migration[which(plot_data$id_year == "Annika_2014" | # add year 5 info
+                             plot_data$id_year == "Jouko_2014" |
+                             plot_data$id_year == "Mikko_2014" | 
+                             plot_data$id_year == "Mikko_2015" |
+                             plot_data$id_year == "Paivi_2016" |
+                             plot_data$id_year == "Tiina_2014" |
+                             plot_data$id_year == "Tiina_2015")] <- "5 +" 
+plot_data$Migration[which(is.na(plot_data$Migration))] <- "1" # everything else is year 1
+
+plot_data <- plot_data[which(plot_data$stage == "juvenile" | plot_data$stage == "adult" & plot_data$Migration == "5 +"),]
+
+```
+----
+
+### 6. Plot the coefficients
+
+First, select the data from the stage and variable of interest. Then, select the data from individuals that survived in multiple years and remove the multiple year individuals from the set containing the rest. Plot a box plot with dashed lines for all the individuals, and then layer on a box plot with solid lines and without whiskers. Add points for birds surviving only one year. Layer on points for birds surviving in multiple years and connect those points with lines. Finally plot all of this in panels with separate axes.
+
+----
+```{r boxplots, fig.height = 5, fig.width = 7}
+# select colors that are distinct
+id_colors <- c("#542344","#1478A3","#00A354","#F34213","#FFBF00")
+
+# select data from one variable and life stage
+tail_plot_data <- plot_data %>% filter(var == "Wind support")
+# create a new variable that contains the individuals surviving multiple migrations
+tail_plot_highlight <- tail_plot_data %>% filter(id == "Jaana" | id == "Senta" | 
+                                                 id == "Valentin" | id == "Mohammed" | 
+                                                 id == "Lars")
+# create a new variable with only individuals that died before a second migration 
+tail_plot_data_points <- tail_plot_data %>% filter(id != "Jaana" & id != "Senta" & 
+                                                   id != "Valentin" & id != "Mohammed" & 
+                                                   id != "Lars")
+# make the plot
+tail_plot <- ggplot(tail_plot_data, aes(x=Migration, y=ssf_coefsTCV)) + 
+  # a box plot with all the data
+  geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+ 
+  # a second box plot without whiskers
+  stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "grey80",
+               lwd = 0.75, fatten = 1.2) +
+  # the points for individuals that died
+  geom_jitter(data = tail_plot_data_points, aes(), size=2, width=0.3, color = "grey30") +
+  # the points for individuals with multiple migrations
+  geom_point(data = tail_plot_highlight, aes(x=Migration, y=ssf_coefsTCV, fill = id), 
+             shape = 21, size = 3) +
+  # the lines connecting the repeated journeys
+  geom_line(data = tail_plot_highlight, aes(group = id, color =id), size = 1.2) +
+  # color the points
+  scale_fill_manual(values = id_colors) + 
+  # color the lines
+  scale_color_manual(values = id_colors) + 
+  # label the plot and axes
+  labs(title = "Wind support", x="Migration", y = "Coefficients" ) +
+  # make a line at y = 0 for clarity
+  geom_hline(yintercept = 0) +
+  # remove background grid, make axis labels black, and increase text size
+  theme_classic() +
+    theme(legend.position = "none", text = element_text(size=15), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+
+# repeat the above for plots of the other predictor variables
+cross_plot_data <- plot_data %>% filter(var == "Crosswind")
+cross_plot_highlight <- cross_plot_data %>% filter(id == "Jaana" | id == "Senta" |
+                                                   id == "Valentin" | id == "Mohammed" | 
+                                                   id == "Lars")
+cross_plot_data_points <- cross_plot_data %>% filter(id != "Jaana" & id != "Senta" & 
+                                                     id != "Valentin" & id != "Mohammed" &
+                                                     id != "Lars")
+
+cross_plot <- ggplot(cross_plot_data, aes(x=Migration, y=ssf_coefsTCV)) + 
+  geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+
+  stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "grey80",
+               lwd = 0.75, fatten = 1.2) +
+  geom_jitter(data = cross_plot_data_points, aes(), size=2, width=0.3, color = "grey30") +
+  geom_point(data = cross_plot_highlight, aes(x=Migration, y=ssf_coefsTCV, fill = id), 
+             shape = 21, size = 3)  + 
+  geom_line(data = cross_plot_highlight, aes(group = id, color =id), size = 1.2) + 
+  scale_fill_manual(values = id_colors) + 
+  scale_color_manual(values = id_colors) + 
+  labs(title = "Crosswind", x="Migration", y = NULL ) +
+  geom_hline(yintercept = 0) +
+  theme_classic() +
+  theme(legend.position = "none", text = element_text(size=15), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+
+lift_plot_data <- plot_data %>% filter(var == "Vertical velocity")
+lift_plot_highlight <- lift_plot_data %>% filter(id == "Jaana" | id == "Senta" | 
+                                                 id == "Valentin" | id == "Mohammed" | 
+                                                 id == "Lars")
+lift_plot_data_points <- lift_plot_data %>% filter(id != "Jaana" & id != "Senta" & 
+                                                   id != "Valentin" & id != "Mohammed" & 
+                                                   id != "Lars")
+
+lift_plot <- ggplot(lift_plot_data, aes(x=Migration, y=ssf_coefsTCV)) + 
+  geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+
+  stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "grey80",
+               lwd = 0.75, fatten = 1.2) +
+  geom_jitter(data = lift_plot_data_points, aes(), size=2, width=0.3, color = "grey30") +
+  geom_point(data = lift_plot_highlight, aes(x=Migration, y=ssf_coefsTCV, fill = id), 
+             shape = 21, size = 3)  + 
+  geom_line(data = lift_plot_highlight, aes(group = id, color =id), size = 1.2) + 
+  scale_fill_manual(values = id_colors) + 
+  scale_color_manual(values = id_colors) + 
+  labs(title = "Vertical velocity", x="Migration", y = NULL ) +
+  geom_hline(yintercept = 0) +
+  theme_classic() +
+  theme(legend.position = "none", text = element_text(size=15), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+
+ggarrange(tail_plot, cross_plot, lift_plot, ncol=3, nrow=1, legend = "none")
+```
+
+The importance of wind support, crosswind, and uplift to route selection over migrations. Negative values of vertical velocity correspond to rising air. We fitted separate conditional logistic regressions for each individual in each migration and extracted the coefficients for each predictor. Coefficients of individuals surviving in multiple years are connected by lines and highlighted in color.
+
+
+
+## Permutations and significance testing 
+
+Because we have only one data set, we cannot compare our result to the results from similar systems: we have no other data sets of the same size, with the same sampling effort, and from populations with the same means and variances of the parameters of interest. However, we can generate alternative data sets that meet these requirements and that also meet a null expectation. Then, we can compare our observed effects to the effects in these alternative data. To do this, we repeatedly randomize our response variable with respect to our predictor variables, model these randomized data, and store the results. The outcome is a distribution of results that would occur if there were no relationship between the dependent and independent variables in our model. 
+
+### 1. Prepare the data for modeling
+
+Here, we use the "mosaic" package to perform the permutations because it allows us to maintain a stratified design in our models. 
+
+---
+```{r environment, message=FALSE, warning=FALSE, results='hide'}
+
+# set the number of permutations
+no.perm <- 101 # here it is equal to the number of used + available steps in each stratum
+
+# label the data with life stage and migration information. This is a repetition of what was
+# done above, but here we label the full data rather than the coefficients
+annotated_data$stage <- NA
+annotated_data$stage[which(annotated_data$id == "Annika" |
+                             annotated_data$id == "Jouko" |
+                             annotated_data$id == "Mikko" |
+                             annotated_data$id == "Paivi" |
+                             annotated_data$id == "Tiina" )] <- "adult"
+annotated_data$stage[which(is.na(annotated_data$stage))] <- "juvenile"
+                                
+annotated_data$Migration <- NA # create an empty column to store values
+annotated_data$Migration[which(annotated_data$id_year == "Jaana_2013" | # add year 2 info
+                                 annotated_data$id_year == "Lars_2013" | 
+                                 annotated_data$id_year == "Mohammed_2018" | 
+                                 annotated_data$id_year == "Senta_2015" | 
+                                 annotated_data$id_year == "Valentin_2015" |
+                                 annotated_data$id_year == "Annika_2012" |
+                                 annotated_data$id_year == "Jouko_2012" |
+                                 annotated_data$id_year == "Paivi_2014" |
+                                 annotated_data$id_year == "Mikko_2012" |
+                                 annotated_data$id_year == "Tiina_2012")] <- "2"
+
+annotated_data$Migration[which(annotated_data$id_year == "Jaana_2014" | # add year 3 info
+                                 annotated_data$id_year == "Lars_2014" | 
+                                 annotated_data$id_year == "Senta_2016" |
+                                 annotated_data$id_year == "Annika_2013" |
+                                 annotated_data$id_year == "Mikko_2013" |
+                                 annotated_data$id_year == "Paivi_2015" |
+                                 annotated_data$id_year == "Mohammed_2019" |
+                                 annotated_data$id_year == "Tiina_2013")] <- "3"
+
+annotated_data$Migration[which(annotated_data$id_year == "Lars_2015" | # add year 4 info
+                                 annotated_data$id_year == "Mohammed_2020")] <- "4"
+
+annotated_data$Migration[which(annotated_data$id_year == "Annika_2014" | # add year 5 info
+                            annotated_data$id_year == "Jouko_2014" |
+                            annotated_data$id_year == "Mikko_2014" | 
+                            annotated_data$id_year == "Mikko_2015" |
+                            annotated_data$id_year == "Paivi_2016" |
+                            annotated_data$id_year == "Tiina_2014" |
+                            annotated_data$id_year == "Tiina_2015")] <- "5 +" 
+annotated_data$Migration[which(is.na(annotated_data$Migration))] <- "1" # everything else is year 1
+
+# make a new unique vector for each step and migration to serve as strata during permutation
+annotated_data$id_year_step <- paste(annotated_data$id_year, annotated_data$step_id_, sep="_")
+```
+---
+
+
+### 2. Perform data stream permutation and test for significance
+
+Once we have modeled all of our observed data, we can run our randomizations. Unfortunately, this becomes a repetitive process because each migration must be modeled separately, the significance of each variable in each migration must be calculated separately, and each distribution of coefficients must be plotted separately. We create an empty data frame so that we have a place to store our results. Then, we use the "mosaic" package to re-sample our data set. We hold our predictors in the same positions relative to the identifying data for each individual and to the other predictors. We shuffle the dependent variable within each group, which we define as a step containing one observation and 100 random locations. Next, we fit our model to the randomized data, extract the coefficients, and save them in our data frame. We repeat this process as many times as we want, which we defined as "no.perm" above. 
+
+```{r permutations, message=FALSE, warning=FALSE, results=F}
+#create an empty data frame to store the coefficients in
+random_model <- data.frame()
+# create a vector to identify migrations by
+migrations <- unique(annotated_data$Migration)
+# and a second, empty one that will act as a column in the data frame 
+Migration <- c()
+# create a loop to go through each migration
+for (j in migrations) {
+  # select the data from the given migration
+  temp_data <- annotated_data[which(annotated_data$Migration == j),]
+# then create a second loop to permute the data
+  for (i in 1:no.perm) {
+    # this is the workhorse, taking each migration and permuting within the strata
+    rando <- mosaic::resample(temp_data, replace = F, groups = id_year_step, shuffled = "case_", 
+                              fixed = c("id","year","scaled_cross","scaled_tail","scaled_vertical",
+                                        "timestamp", "ta_", "sl_", "step_id_"))
+    # model those permuted data sets
+    temp_model <- modelTCV(rando)
+    # extract the coefficients from the model
+    temp_coefs <- summary(temp_model)$coefficients
+    # store the coefficients in the data frame
+    random_model <- rbind(random_model, temp_coefs)
+    # add three more migration labels to identify the three coefficients
+    Migration <- c(Migration,j,j,j)
+    # and finally we let ourselves know we have done this
+    print(paste0("Completed permutation ", i, "."))
+  }
+  print(paste0("Completed permutation of migration ", j, "."))
+}
+colnames(random_model)[1] <- "Estimate"
+# add each migration label to the coefficients
+random_model$Migration <- Migration
+```
+```{r model}
+head(random_model)
+```
+
+
+---
+
+Once we have aggregated all of the coefficients of the permutations for each migration, we compare the observed coefficients to the randomized ones to test for significance.
+
+---
+```{r significance}
+## First extract the coefficients of the models for the observed data
+# fit the same model as above, but now for each migration rather than each individual track
+clogit_results <- annotated_data %>% 
+  group_by(Migration) %>% 
+  nest() %>% 
+  mutate(model_col = purrr::map(data, modelTCV),
+         coefsTCV = purrr::map(model_col, coef),
+         AIC_TCV = map_dbl(model_col, ~AIC(.)),
+         summary_stats = purrr::map(model_col, ~summary(.x))) %>% 
+  unnest(cols = c(coefsTCV, Migration)) %>% 
+  mutate(variable = c("tail","cross","vertical")) %>%
+  arrange(variable)
+clogit_results
+
+# create a vector of the variables in clogit_results
+variable <- unique(clogit_results$variable)
+# and a data frame to store the significance values in
+significances <- data.frame()
+
+# then calculate the significance of the difference between each set of permuted coefficients 
+# and the observed 
+for (i in migrations) {
+  # select the coefficients for migration i
+  temp_observed <- clogit_results[which(clogit_results$Migration == i),]
+  # and the coefficients from permuted data of migration i
+  temp_random <- random_model[grepl(i, random_model$Migration),]
+  for (j in variable) {
+    # select the coefficient that is also variable j
+    temp_obs <- temp_observed[which(temp_observed$variable == j),]
+    # and the permuted coefficients of j
+    temp_rand <- temp_random[grepl(j, row.names(temp_random)),]
+    # count up the permuted coefficients with a more extreme value than the observed and 
+    # divide by the number of coefficients to get the proportion
+    significance <- sum(abs(temp_obs$coefsTCV) < abs(temp_rand$Estimate))/no.perm
+    temp_sig <- c(i, j, significance)
+    significances <- rbind(significances, temp_sig)
+  }
+}
+
+colnames(significances) <- c("Migration", "Variable", "Significance")
+
+significances
+```
+---
+
+## 3. Plot the observed and randomized coefficients
+
+Finally, we plot the distributions of coefficients derived from randomized data along with the observed coefficients.
+
+---
+```{r plots, message=FALSE, warning=FALSE, results='hide', out.extra='angle=90'}
+no.bin <- 25 # set the number of bins for the histograms
+first_tail <- ggplot(data = filter(random_model, 
+                               grepl("tail", rownames(random_model)) & 
+                               Migration == 1), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "tail" & 
+                               Migration == 1)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+first_cross <- ggplot(data= filter(random_model, 
+                                grepl("cross", rownames(random_model)) 
+                                & Migration == 1), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "cross" & 
+                               Migration == 1)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+first_lift <- ggplot(data= filter(random_model, 
+                                grepl("vertical", rownames(random_model)) 
+                                & Migration == 1), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "vertical" & 
+                               Migration == 1)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+
+second_tail <- ggplot(data= filter(random_model, 
+                               grepl("tail", rownames(random_model)) & 
+                               Migration == 2), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "tail" & 
+                               Migration == 2)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+second_cross <- ggplot(data= filter(random_model, 
+                                grepl("cross", rownames(random_model)) 
+                                & Migration == 2), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "cross" & 
+                               Migration == 2)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+second_lift <- ggplot(data= filter(random_model, 
+                                grepl("vertical", rownames(random_model)) 
+                                & Migration == 2), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "vertical" & 
+                               Migration == 2)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+  
+third_tail <- ggplot(data= filter(random_model, 
+                               grepl("tail", rownames(random_model)) & 
+                               Migration == 3), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "tail" & 
+                               Migration == 3)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+third_cross <- ggplot(data= filter(random_model, 
+                                grepl("cross", rownames(random_model)) 
+                                & Migration == 3), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "cross" & 
+                               Migration == 3)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+third_lift <- ggplot(data= filter(random_model, 
+                                grepl("vertical", rownames(random_model)) 
+                                & Migration == 3), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "vertical" & 
+                               Migration == 3)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+
+fourth_tail <- ggplot(data= filter(random_model, 
+                               grepl("tail", rownames(random_model)) & 
+                               Migration == 4), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "tail" & 
+                               Migration == 4)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+fourth_cross <- ggplot(data= filter(random_model, 
+                                grepl("cross", rownames(random_model)) 
+                                & Migration == 4), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "cross" & 
+                               Migration == 4)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+fourth_lift <- ggplot(data= filter(random_model, 
+                                grepl("vertical", rownames(random_model)) 
+                                & Migration == 4), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "vertical" & 
+                               Migration == 4)$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+
+adult_tail <- ggplot(data= filter(random_model, 
+                               grepl("tail", rownames(random_model)) & 
+                               Migration == "5 +"), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "tail" & 
+                               Migration == "5 +")$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+adult_cross <- ggplot(data= filter(random_model, 
+                                grepl("cross", rownames(random_model)) 
+                                & Migration == "5 +"), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "cross" & 
+                               Migration == "5 +")$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+adult_lift <- ggplot(data= filter(random_model, 
+                                grepl("vertical", rownames(random_model)) 
+                                & Migration == "5 +"), aes(Estimate)) + 
+  geom_histogram(fill="black", bins = no.bin) +
+  geom_vline(aes(xintercept = filter(clogit_results, variable == "vertical" & 
+                               Migration == "5 +")$coefsTCV), color="red", size=1) +
+  theme_classic()+
+  theme(legend.position = "none", text = element_text(size=20), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+
+all_15 <- ggarrange(first_tail + rremove("xylab"), second_tail+ rremove("xylab"),
+                    third_tail + rremove("xylab"), fourth_tail+ rremove("xylab"), 
+                    adult_tail + rremove("xylab"), first_cross + rremove("xylab"),
+                    second_cross + rremove("xylab"), third_cross+ rremove("xylab"),
+                    fourth_cross + rremove("xylab"), adult_cross+ rremove("xylab"),
+                    first_lift + rremove("ylab") + labs(x = "1"), second_lift +
+                    rremove("ylab") + labs(x = "2"), third_lift+ rremove("ylab") + 
+                    labs(x = "3"), fourth_lift+ rremove("ylab") + labs(x = "4"), 
+                    adult_lift+ rremove("ylab") + labs(x = "5 +"),
+                    ncol=5, nrow=3, legend = "none")
+
+annotate_figure(all_15, left = text_grob("Frequency", rot = 90, vjust = 1,),
+                bottom = text_grob("Coefficient"))
+```
+---
+Comparisons of the observed coefficients (red) and the distribution of coefficients from randomized data (black) in each migratory journey (1 to 5 or more) and for each predictor.
+
