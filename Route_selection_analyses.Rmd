@@ -577,8 +577,8 @@ SSF_results$Migration[which(is.na(SSF_results$Migration))] <- "1" # everything e
 SSF_results$category <- NA
 SSF_results$category[which(SSF_results$Migration == 1)] <- "First year"
 SSF_results$category[which(SSF_results$Migration == "5 +")] <- "Adult"
-SSF_results$category[which(SSF_results$Migration %in% c(2,3,4))] <- "Juvenile"
-SSF_results$category <- factor(SSF_results$category, levels = c("First year", "Juvenile", "Adult"))
+SSF_results$category[which(SSF_results$Migration %in% c(2,3,4))] <- "Intermediate"
+SSF_results$category <- factor(SSF_results$category, levels = c("First year", "Intermediate", "Adult"))
 
 
 ```
@@ -591,51 +591,7 @@ First, select the data from the stage and variable of interest. Then, select the
 
 ----
 ```{r boxplots, fig.height = 5, fig.width = 7}
-# select colors that are distinct
-id_colors <- c("#542344","#1478A3","#00A354","#FFBF00","#F34213")
-# create a vector identifying the five birds that transmitted multiple journeys
-retransmitted <- c("Jaana", "Senta", "Valentin", "Mohammed", "Lars")
-# build a function for plotting 
-SSF_plot <- function(data, y_axis, x_axis, var) {
-  # select the data to plot
-  plot_data = data %>% filter(variable == var)
-  # plot them
-  ggplot(data, aes(x={{x_axis}}, y={{y_axis}})) + 
-  # a box plot with all the data
-  geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+ 
-  # a second box plot without whiskers
-  stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "grey80",
-               lwd = 0.75, fatten = 1.2) +
-  # the points for individuals that died
-  geom_jitter(data = plot_data %>% filter(!id %in% retransmitted), aes(), size=2, width=0.3, color = "grey30") +
-  # the points for individuals with multiple migrations
-  geom_point(data = plot_data %>% filter(id %in% retransmitted), aes(x={{x_axis}}, y={{y_axis}}, fill = id), 
-             shape = 21, size = 3, colour = "transparent") +
-  # the lines connecting the repeated journeys
-  geom_line(data = plot_data %>% filter(id %in% retransmitted), aes(group = id, color =id), size = 1.2) +
-  # color the points
-  scale_fill_manual(values = id_colors) + 
-  # color the lines
-  scale_color_manual(values = id_colors) + 
-  # make a line at y = 0 for clarity
-  geom_hline(yintercept = 0) +
-  # remove the labels
-  labs(x = "", y="")+
-  # remove background grid, make axis labels black, and increase text size
-  theme_classic() +
-    theme(legend.position = "none", text = element_text(size=15), 
-        axis.text.x = element_text(colour = "black"),
-        axis.text.y = element_text(colour = "black"))
-}
 
-support_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Wind support") + ggtitle("Wind support")
-uplift_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Boundary layer height") + ggtitle("Uplift (BLH)")
-interaction_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Interaction") + ggtitle("Wind support x Uplift")
-
-figure1 <- ggarrange(support_plot, uplift_plot, interaction_plot, ncol = 3, legend = "none")
-
-annotate_figure(figure1, left = text_grob("Coefficient", rot = 90, size = 20),
-                bottom = text_grob("Migration", size = 20))
 
 
 # create a new function for a slimmed plot
@@ -645,20 +601,19 @@ SSF_plot <- function(data, y_axis, x_axis, error, var) {
   # plot them
   ggplot(plot_data, aes(x={{x_axis}}, y={{y_axis}})) + 
   # a box plot with all the data
-  geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+ 
+  geom_boxplot(outlier.shape = NA, color = "slategray3", linetype="dashed", lwd = 1)+ 
   # a second box plot without whiskers
-  stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "grey80",
-               lwd = 0.75, fatten = 1.2) +
+  stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "#DBE3F3", color = "slategray3", lwd = 1, fatten = 1) +
     geom_errorbar(
     aes(ymin = coefs-se, ymax = coefs+se, group = id_year),
-    position = position_dodge(0.5), width = 0.2
+    position = position_dodge(0.8), width = 1, color = "grey50"
     )+
-  geom_point(position = position_dodge(0.5), aes(x={{x_axis}}, y={{y_axis}}, group = id_year))+
+  geom_point(position = position_dodge(0.8), aes(x={{x_axis}}, y={{y_axis}}, group = id_year), size = 2)+
   # make a line at y = 0 for clarity
   geom_hline(yintercept = 0) +
   # remove the labels
   labs(x = "", y="") +
-  scale_y_continuous(breaks = round(seq(min(plot_data$coefs), max(plot_data$coefs), by = 0.3),1))+
+  #scale_y_continuous(breaks = round(seq(min(plot_data$coefs), max(plot_data$coefs), by = 0.5),1))+
   # remove background grid, make axis labels black, and increase text size
   theme_classic() +
     theme(legend.position = "none", text = element_text(size=15), 
@@ -669,108 +624,12 @@ SSF_plot <- function(data, y_axis, x_axis, error, var) {
 
 support_plot <- SSF_plot(SSF_results, coefs, category, var = "Wind support") + ggtitle("Wind support")
 uplift_plot <- SSF_plot(SSF_results, coefs, category, var = "Boundary layer height") + ggtitle("Uplift (BLH)")
-interaction_plot <- SSF_plot(SSF_results, category, Migration, var = "Interaction") + ggtitle("Wind support x Uplift")
+interaction_plot <- SSF_plot(SSF_results, coefs, category, var = "Interaction") + ggtitle("Wind support x Uplift")
 
 figure1 <- ggarrange(support_plot, uplift_plot, interaction_plot, ncol = 3, legend = "none")
 
 annotate_figure(figure1, left = text_grob("Coefficient", rot = 90, size = 20),
                 bottom = text_grob("Migration", size = 20))
-
-
-
-
-
-# # select data from one variable and life stage
-# tail_SSF_results <- SSF_results %>% filter(var == "Wind support")
-# # create a new variable that contains the individuals surviving multiple migrations
-# tail_plot_highlight <- tail_SSF_results %>% filter(id == "Jaana" | id == "Senta" | 
-#                                                  id == "Valentin" | id == "Mohammed" | 
-#                                                  id == "Lars")
-# # create a new variable with only individuals that died before a second migration 
-# tail_SSF_results_points <- tail_SSF_results %>% filter(id != "Jaana" & id != "Senta" & 
-#                                                    id != "Valentin" & id != "Mohammed" & 
-#                                                    id != "Lars")
-# # make the plot
-# tail_plot <- ggplot(tail_SSF_results, aes(x=Migration, y=ssf_coefsTU)) + 
-#   # a box plot with all the data
-#   geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+ 
-#   # a second box plot without whiskers
-#   stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "grey80",
-#                lwd = 0.75, fatten = 1.2) +
-#   # the points for individuals that died
-#   geom_jitter(data = tail_SSF_results_points, aes(), size=2, width=0.3, color = "grey30") +
-#   # the points for individuals with multiple migrations
-#   geom_point(data = tail_plot_highlight, aes(x=Migration, y=ssf_coefsTU, fill = id), 
-#              shape = 21, size = 3, colour = "transparent") +
-#   # the lines connecting the repeated journeys
-#   geom_line(data = tail_plot_highlight, aes(group = id, color =id), size = 1.2) +
-#   # color the points
-#   scale_fill_manual(values = id_colors) + 
-#   # color the lines
-#   scale_color_manual(values = id_colors) + 
-#   # label the plot and axes
-#   labs(title = "Wind support", x="Migration", y = "Coefficients" ) +
-#   # make a line at y = 0 for clarity
-#   geom_hline(yintercept = 0) +
-#   # remove background grid, make axis labels black, and increase text size
-#   theme_classic() +
-#     theme(legend.position = "none", text = element_text(size=15), 
-#         axis.text.x = element_text(colour = "black"),
-#         axis.text.y = element_text(colour = "black"))
-# 
-# # repeat the above for plots of the other predictor variables
-# lift_SSF_results <- SSF_results %>% filter(var == "Boundary layer height")
-# lift_plot_highlight <- lift_SSF_results %>% filter(id == "Jaana" | id == "Senta" | 
-#                                                  id == "Valentin" | id == "Mohammed" | 
-#                                                  id == "Lars")
-# lift_SSF_results_points <- lift_SSF_results %>% filter(id != "Jaana" & id != "Senta" & 
-#                                                    id != "Valentin" & id != "Mohammed" & 
-#                                                    id != "Lars")
-# 
-# lift_plot <- ggplot(lift_SSF_results, aes(x=Migration, y=ssf_coefsTU)) + 
-#   geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+
-#   stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "grey80",
-#                lwd = 0.75, fatten = 1.2) +
-#   geom_jitter(data = lift_SSF_results_points, aes(), size=2, width=0.3, color = "grey30") +
-#   geom_point(data = lift_plot_highlight, aes(x=Migration, y=ssf_coefsTU, fill = id), 
-#              shape = 21, size = 3, colour = "transparent")  + 
-#   geom_line(data = lift_plot_highlight, aes(group = id, color =id), size = 1.2) + 
-#   scale_fill_manual(values = id_colors) + 
-#   scale_color_manual(values = id_colors) + 
-#   labs(title = "Uplift (BLH)", x="Migration", y = NULL ) +
-#   geom_hline(yintercept = 0) +
-#   theme_classic() +
-#   theme(legend.position = "none", text = element_text(size=15), 
-#         axis.text.x = element_text(colour = "black"),
-#         axis.text.y = element_text(colour = "black"))
-# 
-# inter_SSF_results <- SSF_results %>% filter(var == "Interaction")
-# inter_plot_highlight <- inter_SSF_results %>% filter(id == "Jaana" | id == "Senta" | 
-#                                                  id == "Valentin" | id == "Mohammed" | 
-#                                                  id == "Lars")
-# inter_SSF_results_points <- inter_SSF_results %>% filter(id != "Jaana" & id != "Senta" & 
-#                                                    id != "Valentin" & id != "Mohammed" & 
-#                                                    id != "Lars")
-# 
-# inter_plot <- ggplot(inter_SSF_results, aes(x=Migration, y=ssf_coefsTU)) + 
-#   geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+
-#   stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "grey80",
-#                lwd = 0.75, fatten = 1.2) +
-#   geom_jitter(data = inter_SSF_results_points, aes(), size=2, width=0.3, color = "grey30") +
-#   geom_point(data = inter_plot_highlight, aes(x=Migration, y=ssf_coefsTU, fill = id), 
-#              shape = 21, size = 3, colour = "transparent")  + 
-#   geom_line(data = inter_plot_highlight, aes(group = id, color =id), size = 1.2) + 
-#   scale_fill_manual(values = id_colors) + 
-#   scale_color_manual(values = id_colors) + 
-#   labs(title = "Wind support x Uplift", x="Migration", y = NULL ) +
-#   geom_hline(yintercept = 0) +
-#   theme_classic() +
-#   theme(legend.position = "none", text = element_text(size=15), 
-#         axis.text.x = element_text(colour = "black"),
-#         axis.text.y = element_text(colour = "black"))
-# 
-# 
-# ggarrange(tail_plot, lift_plot, inter_plot, ncol = 3, legend = "none")#, sl_plot, ta_plot, ncol=3, nrow=2, legend = "none")
 ```
 
 
@@ -1002,6 +861,53 @@ significances %>% arrange(Variable, Migration)
 Plot the used and available wind support and uplift.
 
 ```{r supplots}
+# select colors that are distinct
+id_colors <- c("#542344","#1478A3","#00A354","#FFBF00","#F34213")
+# create a vector identifying the five birds that transmitted multiple journeys
+retransmitted <- c("Jaana", "Senta", "Valentin", "Mohammed", "Lars")
+# build a function for plotting 
+SSF_plot <- function(data, y_axis, x_axis, var) {
+  # select the data to plot
+  plot_data = data %>% filter(variable == var)
+  # plot them
+  ggplot(data, aes(x={{x_axis}}, y={{y_axis}})) + 
+  # a box plot with all the data
+  geom_boxplot(outlier.shape = NA, color = "grey30", linetype="dashed")+ 
+  # a second box plot without whiskers
+  stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, 
+               fill = "grey80", lwd = 0.75, fatten = 1.2) +
+  # the points for individuals that died
+  geom_jitter(data = plot_data %>% filter(!id %in% retransmitted), aes(), size=2, width=0.3, color = "grey30") +
+  # the points for individuals with multiple migrations
+  geom_point(data = plot_data %>% filter(id %in% retransmitted), aes(x={{x_axis}},
+             y={{y_axis}}, fill = id), shape = 21, size = 3, colour = "transparent") +
+  # the lines connecting the repeated journeys
+  geom_line(data = plot_data %>% filter(id %in% retransmitted), aes(group = id, color =id), size = 1.2) +
+  # color the points
+  scale_fill_manual(values = id_colors) + 
+  # color the lines
+  scale_color_manual(values = id_colors) + 
+  # make a line at y = 0 for clarity
+  geom_hline(yintercept = 0) +
+  # remove the labels
+  labs(x = "", y="")+
+  # remove background grid, make axis labels black, and increase text size
+  theme_classic() +
+    theme(legend.position = "none", text = element_text(size=15), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+}
+
+support_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Wind support") + ggtitle("Wind support")
+uplift_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Boundary layer height") + ggtitle("Uplift (BLH)")
+interaction_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Interaction") + ggtitle("Wind support x Uplift")
+
+figure1 <- ggarrange(support_plot, uplift_plot, interaction_plot, ncol = 3, legend = "none")
+
+annotate_figure(figure1, left = text_grob("Coefficient", rot = 90, size = 20),
+                bottom = text_grob("Migration", size = 20))
+
+
 # The values of wind support (m/s) and uplift (Pa/s) available and used in each migratory
 # journey
 
@@ -1120,35 +1026,35 @@ cs <- filter(random_model, grepl("sl_", rownames(random_model)))
 ca <- filter(random_model, grepl("ta_", rownames(random_model)))
 
 # create the plots
-first_tail <- null_plot(ct, Estimate, journey = trip[1]) + ggtitle("Wind support")
-second_tail <- null_plot(ct, Estimate, journey = trip[2]) + ggtitle(" ")
-third_tail <- null_plot(ct, Estimate, journey = trip[3]) + ggtitle(" ")
-fourth_tail <- null_plot(ct, Estimate, journey = trip[4]) + ggtitle(" ")
-fifth_tail <- null_plot(ct, Estimate, journey = trip[5]) + ggtitle(" ")
+first_tail <- null_plot(ct, Estimate, journey = trip[2]) + ggtitle("Wind support")
+second_tail <- null_plot(ct, Estimate, journey = trip[3]) + ggtitle(" ")
+third_tail <- null_plot(ct, Estimate, journey = trip[4]) + ggtitle(" ")
+fourth_tail <- null_plot(ct, Estimate, journey = trip[5]) + ggtitle(" ")
+fifth_tail <- null_plot(ct, Estimate, journey = trip[1]) + ggtitle(" ")
 
-first_lift <- null_plot(cl, Estimate, journey = trip[1]) + ggtitle("Uplift (BLH)")
-second_lift <- null_plot(cl, Estimate, journey = trip[2]) + ggtitle(" ")
-third_lift <- null_plot(cl, Estimate, journey = trip[3]) + ggtitle(" ")
-fourth_lift <- null_plot(cl, Estimate, journey = trip[4]) + ggtitle(" ")
-fifth_lift <- null_plot(cl, Estimate, journey = trip[5]) + ggtitle(" ")
+first_lift <- null_plot(cl, Estimate, journey = trip[2]) + ggtitle("Uplift (BLH)")
+second_lift <- null_plot(cl, Estimate, journey = trip[3]) + ggtitle(" ")
+third_lift <- null_plot(cl, Estimate, journey = trip[4]) + ggtitle(" ")
+fourth_lift <- null_plot(cl, Estimate, journey = trip[5]) + ggtitle(" ")
+fifth_lift <- null_plot(cl, Estimate, journey = trip[1]) + ggtitle(" ")
 
-first_inter <- null_plot(ci, Estimate, journey = trip[1]) + ggtitle("Wind x Uplift")
-second_inter <- null_plot(ci, Estimate, journey = trip[2]) + ggtitle(" ")
-third_inter <- null_plot(ci, Estimate, journey = trip[3]) + ggtitle(" ")
-fourth_inter <- null_plot(ci, Estimate, journey = trip[4]) + ggtitle(" ")
-fifth_inter <- null_plot(ci, Estimate, journey = trip[5]) + ggtitle(" ")
+first_inter <- null_plot(ci, Estimate, journey = trip[2]) + ggtitle("Wind x Uplift")
+second_inter <- null_plot(ci, Estimate, journey = trip[3]) + ggtitle(" ")
+third_inter <- null_plot(ci, Estimate, journey = trip[4]) + ggtitle(" ")
+fourth_inter <- null_plot(ci, Estimate, journey = trip[5]) + ggtitle(" ")
+fifth_inter <- null_plot(ci, Estimate, journey = trip[1]) + ggtitle(" ")
 
-first_step <- null_plot(cs, Estimate, journey = trip[1]) + ggtitle("log Step length")
-second_step <- null_plot(cs, Estimate, journey = trip[2]) + ggtitle(" ")
-third_step <- null_plot(cs, Estimate, journey = trip[3]) + ggtitle(" ")
-fourth_step <- null_plot(cs, Estimate, journey = trip[4]) + ggtitle(" ")
-fifth_step <- null_plot(cs, Estimate, journey = trip[5]) + ggtitle(" ")
+first_step <- null_plot(cs, Estimate, journey = trip[2]) + ggtitle("log Step length")
+second_step <- null_plot(cs, Estimate, journey = trip[3]) + ggtitle(" ")
+third_step <- null_plot(cs, Estimate, journey = trip[4]) + ggtitle(" ")
+fourth_step <- null_plot(cs, Estimate, journey = trip[5]) + ggtitle(" ")
+fifth_step <- null_plot(cs, Estimate, journey = trip[1]) + ggtitle(" ")
 
-first_angle <- null_plot(ca, Estimate, journey = trip[1]) + ggtitle("cos Turning angle")
-second_angle <- null_plot(ca, Estimate, journey = trip[2]) + ggtitle(" ")
-third_angle <- null_plot(ca, Estimate, journey = trip[3]) + ggtitle(" ")
-fourth_angle <- null_plot(ca, Estimate, journey = trip[4]) + ggtitle(" ")
-fifth_angle <- null_plot(ca, Estimate, journey = trip[5]) + ggtitle(" ")
+first_angle <- null_plot(ca, Estimate, journey = trip[2]) + ggtitle("cos Turning angle")
+second_angle <- null_plot(ca, Estimate, journey = trip[3]) + ggtitle(" ")
+third_angle <- null_plot(ca, Estimate, journey = trip[4]) + ggtitle(" ")
+fourth_angle <- null_plot(ca, Estimate, journey = trip[5]) + ggtitle(" ")
+fifth_angle <- null_plot(ca, Estimate, journey = trip[1]) + ggtitle(" ")
 
 # combine the plots
 all_15 <- ggarrange(first_tail,second_tail,third_tail,fourth_tail,fifth_tail, 
