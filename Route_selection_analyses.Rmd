@@ -26,13 +26,10 @@ The first step is to make sure that we have all of the packages and functions th
 #set a working directory and load required packages
 setwd("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf")
 mypath <- paste0(getwd(),"/")
-ssf_packs <- c("lubridate", "amt", "purrr", "move", "mapview", "ggpubr", "survival",
+ssf_packs <- c("lubridate", "amt", "move", "mapview", "ggpubr", "survival",
                "sjPlot", "MASS", "modelr", "mosaic", "caret", "tidyverse")
 lapply(ssf_packs, require, character.only = TRUE)
 
-```
-
-```{r functions, message=FALSE, warning=FALSE, results='hide'}
 #import required functions
 NCEP.loxodrome.na <- function (lat1, lat2, lon1, lon2) {
   deg2rad <- pi/180
@@ -159,7 +156,7 @@ all_autumns <- all_autumns %>% filter(#name != "Aarne" &
                          #name != "Johannes" &
                          #name != "Kari" & 
                  # disregard the data from early migrations by birds of unknown age
-                        #!id_year %in% unk_age &
+                        !id_year %in% unk_age &
                  # some individuals do not transmit their first trip
                          name != "Emma" &
                          name != "Lisa" &
@@ -219,9 +216,10 @@ autumn_track <- data.frame()
 for (i in sort(unique(all_autumns$sample_rate))) {
   # select data of the given sampling rate
   temp_rdata <- all_autumns[which(all_autumns$sample_rate == i),]
-  for (j in unique(temp_rdata$id_year)) {
-    # select data for the given track
-    temp_idata <- temp_rdata[which(temp_rdata$id_year == j),]
+  for (j in sort(unique(temp_rdata$id_year))) {
+  print(j)
+  # select data for the given track
+  temp_idata <- temp_rdata[which(temp_rdata$id_year == j),]
   # make the track  
   trk <- mk_track(temp_idata,.x=long, .y=lat, .t=timestamp, id = name, crs = wgs)
   # resample to a consistent time between steps
@@ -236,7 +234,7 @@ for (i in sort(unique(all_autumns$sample_rate))) {
   # save
   autumn_track <- rbind(autumn_track, rnd_stps)
   # and signal
-  print(paste0("Successfully created random steps for track ", j))
+  print(paste0("Successfully created random steps for track ", j, "."))
   }
 }
 
@@ -291,32 +289,21 @@ names(autumn_track)[c(2,4)] <-c("location-long", "location-lat")
 autumn_track$timestamp <- autumn_track$t1_ 
 autumn_track$timestamp <- paste0(autumn_track$timestamp,".000" )
 
-# split the data to conform to Movebank's file size limits
-half1 <- autumn_track[1:(0.5*nrow(autumn_track)),]
-half2 <- autumn_track[(0.5*nrow(autumn_track)+1):nrow(autumn_track),]
-
 # export each file for Movebank annotation
-write.csv(half1, paste0("HB1_allBirds_",Sys.Date(),".csv"), row.names = FALSE)
-write.csv(half2, paste0("HB2_allBirds_",Sys.Date(),".csv"), row.names = FALSE)
+write.csv(autumn_track, paste0("HB_", Sys.Date(), ".csv"), row.names = FALSE)
 ```
 
 ----
 
 ### 3. Prepare data for modeling
 
-Step-selection analyses use conditional logistic regressions to predict whether a location is used or unused based on environmental conditions. Once we have our files returned from Movebank's Env-DATA service, we can process the annotated data for modeling. Using the directions we calculated above, we can derive wind support from the wind data. Our second variable of interest is the vertical velocity of pressure, which proxies uplift and subsidence. Because pressure is lower with increasing altitude, negative vertical velocity values indicate uplift. Our third variable is the interaction between wind support and uplift because birds can select for both.
+Step-selection analyses use conditional logistic regressions to predict whether a location is used or unused based on environmental conditions. Once we have our files returned from Movebank's Env-DATA service, we can process the annotated data for modeling. Using the directions we calculated above, we can derive wind support (m/s) from the wind data. Our second variable of interest is the planetary boundary layer height (m), which proxies uplift and subsidence. The boundary layer is higher where rising air pushes it upward. Our third variable is the interaction between wind support and uplift because we expect that birds select routes that maximize both.
 
 ----
 ```{r import, results='hide', message=FALSE, warning=FALSE, eval=F}
-# read in the annotated data
-half1 <- read.csv(paste0(mypath,"HT_150s-4573417134914709132.csv"),
-                  stringsAsFactors = F, header = T)
-half2 <- read.csv(paste0(mypath,"HT_150s-4433398109146553161.csv"),
-                  stringsAsFactors = F, header = T)
-
-half1 <- read.csv(paste0(mypath, "annotations/HB_100s_1kNN_2022-04-29-3818566895793188085.csv"), stringsAsFactors = F, header = T)
-half2 <- read.csv(paste0(mypath, "annotations/HB_100s_925NN_2022-04-29-8580129438169723627.csv"), stringsAsFactors = F, header = T)
-pvvUV <- read.csv(paste0(mypath, "annotations/HB_100s_pvvUV_2022-04-29-4408269735548142621.csv"), stringsAsFactors = F, header = T) %>%
+annotated_data <- read.csv(paste0(mypath,
+                           "annotations/HB_2022-04-29-526598093103552488.csv"), 
+                           stringsAsFactors = F, header = T)  %>%
   # rename the columns to be more useful
   rename(lon1 = x1_,
          lat1 = y1_,
@@ -324,49 +311,8 @@ pvvUV <- read.csv(paste0(mypath, "annotations/HB_100s_pvvUV_2022-04-29-440826973
          lat2 = location.lat,
          u_wind = ECMWF.ERA5.PL.U.Wind,
          v_wind = ECMWF.ERA5.PL.V.Wind,
-         vertical_pressure = ECMWF.ERA5.PL.Pressure.Vertical.Velocity) %>% 
-  # then reformat the time and logical, and calculate wind support
-  mutate(timestamp = as.POSIXct(strptime(timestamp, format = "%Y-%m-%d %H:%M:%S"),
-                                tz = "UTC"),
-         year = format(as.POSIXct(timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y"),
-         id_year = paste(id,year,sep="_"),
-         case_ = as.numeric(case_),
-         tail = wind_support(u_wind, v_wind, heading))
-sst_blh <- read.csv(paste0(mypath, "annotations/HB_100s_blh_sst_NN_2022-04-29-7936675970549789811.csv"), stringsAsFactors = F, header = T)
-
-colnames(half1)[16] <- "Temp_1000"
-colnames(half2)[16] <- "Temp_925"
-colnames(sst_blh)[16:18] <- c("BLH", "SST", "Temp_2m")
-
-annotated_data <- half1
-table(annotated_data$location.long == half2$location.long)
-annotated_data$Temp_925 <- half2$Temp_925
-annotated_data$u_wind <- pvvUV$u_wind
-annotated_data$v_wind <- pvvUV$v_wind
-annotated_data$tail <- wind_support(annotated_data$u_wind, annotated_data$v_wind, annotated_data$heading) 
-annotated_data$BLH <- sst_blh$BLH
-annotated_data$SST <- sst_blh$SST
-annotated_data$Temp_2m <- sst_blh$Temp_2m
-annotated_data <- annotated_data %>% 
-  # then reformat the time and logical, and calculate wind support
-  mutate(timestamp = as.POSIXct(strptime(timestamp, format = "%Y-%m-%d %H:%M:%S"),
-                                tz = "UTC"),
-         year = format(as.POSIXct(timestamp,format="%Y-%m-%d %H:%M:%S"),"%Y"),
-         id_year = paste(id,year,sep="_"),
-         case_ = as.numeric(case_), 
-         deltaT = Temp_1000 - Temp_925, 
-         ssDeltaT = SST - Temp_2m)
-
-# and bind them into a single frame
-annotated_data <- rbind(half1,half2) %>%
-  # rename the columns to be more useful
-  rename(lon1 = x1_,
-         lat1 = y1_,
-         lon2 = location.long,
-         lat2 = location.lat,
-         u_wind = ECMWF.ERA5.PL.U.Wind,
-         v_wind = ECMWF.ERA5.PL.V.wind,
-         vertical_pressure = ECMWF.ERA5.PL.Pressure.Vertical.Velocity) %>% 
+         vertical_pressure = ECMWF.ERA5.PL.Pressure.Vertical.Velocity,
+         BLH = ECMWF.ERA5.SL.Boundary.Layer.Height) %>% 
   # then reformat the time and logical, and calculate wind support
   mutate(timestamp = as.POSIXct(strptime(timestamp, format = "%Y-%m-%d %H:%M:%S"),
                                 tz = "UTC"),
@@ -377,8 +323,15 @@ annotated_data <- rbind(half1,half2) %>%
 
 
 ```
+```{r rm_birds_silently, echo=F, warning=F, message=F, error=F}
+load(paste0(mypath,"annotated_data_blh.RData"))
 
-```{r rm_birds_silently, echo=F, warning=F, message=F, error=F, eval=F}
+
+# we don't know the amount of experience that birds tagged as adults have
+# collect the journeys for which experience can't be safely guessed
+unk_age <- c("Annika_2011", "Annika_2012", "Annika_2013", "Jouko_2011",  "Jouko_2012",
+             "Jouko_2013", "Mikko_2011", "Mikko_2012", "Mikko_2013",  "Paivi_2013",
+             "Paivi_2014", "Paivi_2015", "Tiina_2011",  "Tiina_2012", "Tiina_2013")
 
 # remove birds of unknown age with fewer than 4 tracked autumn migrations
 annotated_data <- annotated_data %>% filter(id != "Aarne" &
@@ -406,25 +359,103 @@ annotated_data <- annotated_data %>%
 
 ```
 
-```{r readInvis, echo=F, warning=F, message=F, error=F}
-save(annotated_data, file = "sst_pvv_blh_temp.RData")
-annotated_data$delta <- annotated_data$Temp_1000 - annotated_data$Temp_925
-df <- annotated_data %>% group_by(id_year,step_id_) %>% arrange(desc(delta), .by_group = T) %>% slice(1) %>% mutate(match = paste0(id_year_step, "_", lon2, "_", delta))# select the highest uplift per step
+```{r environment, message=FALSE, warning=FALSE, results='hide'}
 
+# label the data with life stage and migration information
+annotated_data$stage <- NA
+annotated_data$stage[which(annotated_data$id == "Annika" |
+                             annotated_data$id == "Jouko" |
+                             annotated_data$id == "Mikko" |
+                             annotated_data$id == "Paivi" |
+                             annotated_data$id == "Tiina" )] <- "adult"
+annotated_data$stage[which(is.na(annotated_data$stage))] <- "juvenile"
+                                
+annotated_data$migration <- NA # create an empty column to store values
+annotated_data$migration[which(annotated_data$id_year == "Jaana_2013" | # add year 2 info
+                                 annotated_data$id_year == "Lars_2013" | 
+                                 annotated_data$id_year == "Mohammed_2018" | 
+                                 annotated_data$id_year == "Senta_2015" | 
+                                 annotated_data$id_year == "Valentin_2015")] <- "2"
 
-used <- annotated_data[which(annotated_data$case_ == 1),]
-used$match <- paste0(used$id_year_step, "_", used$lon2, "_", used$delta)
-used <- used[which(used$match %in% df$match),]
+annotated_data$migration[which(annotated_data$id_year == "Jaana_2014" | # add year 3 info
+                                 annotated_data$id_year == "Lars_2014" | 
+                                 annotated_data$id_year == "Mohammed_2019" |
+                                 annotated_data$id_year == "Senta_2016")] <- "3"
 
-annotated_data$match <- paste0(annotated_data$id_year_step, "_", annotated_data$lon2, "_", annotated_data$delta)
+annotated_data$migration[which(annotated_data$id_year == "Lars_2015" | # add year 4 info
+                                 annotated_data$id_year == "Mohammed_2020")] <- "4"
 
-full <- annotated_data[!(annotated_data$match %in% used$match),]
-df <- df[!(df$match %in% used$match),]
+annotated_data$migration[which(annotated_data$id_year == "Annika_2014" | # add year 5 info
+                            annotated_data$id_year == "Jouko_2014" |
+                            annotated_data$id_year == "Mikko_2014" | 
+                            annotated_data$id_year == "Mikko_2015" |
+                            annotated_data$id_year == "Paivi_2016" |
+                            annotated_data$id_year == "Tiina_2014" |
+                            annotated_data$id_year == "Tiina_2015")] <- "Adult" 
+annotated_data$migration[which(is.na(annotated_data$migration))] <- "1" # everything else is year 1
 
-ggplot(full, aes(Migration, delta))+geom_jitter(width = 0.35, alpha = 0.75, color = "black", shape = 1, data = df)+geom_jitter(data = full[which(full$case_ == 1),], alpha = 0.25, color = "red", width = 0.35)+geom_jitter(shape = 21, fill = "red", size = 2.5, width=0.35, data = used)+geom_boxplot(lwd = 0.75, alpha = 0)+labs(y = "Delta T")+theme_minimal()
+annotated_data$category <- NA
+annotated_data$category[which(annotated_data$migration == 1)] <- "First year"
+annotated_data$category[which(annotated_data$migration == "Adult")] <- "Adult"
+annotated_data$category[which(annotated_data$migration %in% c(2,3,4))] <- "Intermediate"
+annotated_data$category <- factor(annotated_data$category, levels = c("Adult", "Intermediate", "First year"))
 
-df2 <- annotated_data[!is.na(annotated_data$delta),] %>% group_by(id_year,step_id_) %>% arrange(delta, .by_group = T) %>% slice(1) # select the lowest uplift per step
-load(paste0(mypath, "annotated_data_25.1.21.RData"))
+```
+---
+
+```{r, densityPlots}
+age_col <- c("#ACC6FF", "#7A9EFF", "#3A6FFF", "#0044FF", "#0032BD")
+annotated_data$migration <- factor(annotated_data$migration, levels = c("Adult", 4, 3, 2, 1))
+
+ws <- annotated_data[annotated_data$case_ == TRUE,] %>% 
+    ggplot(aes(tail, migration, fill = migration, color = NULL)) + 
+    geom_density_ridges2(alpha = 0.8, quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x)) + 
+    labs(x = "Wind support (m/s)", y = "", fill = "Migration")+
+    scale_fill_manual(values=age_col)+
+    coord_cartesian(expand = F)+
+    theme_minimal() +
+    theme(legend.position = "none", text = element_text(size=15), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        strip.text.x = element_text(size = 20),
+        axis.line = element_line(colour = "black"),
+        axis.ticks = element_line(colour = "black"))
+vv <- annotated_data[annotated_data$case_ == TRUE,] %>% 
+    ggplot(aes(vertical_pressure, migration, fill = migration)) + 
+    geom_density_ridges2(alpha = 0.8,quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x)) + 
+    labs(x = "Vertical velocity (Pa/s)", y = "Density", fill = "Migration")+
+    scale_fill_manual(values=age_col)+
+    coord_cartesian(expand = F)+
+    theme_minimal() +
+    theme(legend.position = "none", text = element_text(size=15), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        strip.text.x = element_text(size = 20),
+        axis.line = element_line(colour = "black"),
+        axis.ticks = element_line(colour = "black"))
+bl <- annotated_data[annotated_data$case_ == TRUE,] %>% 
+    ggplot(aes(BLH, migration, fill = migration)) + 
+    geom_density_ridges2(alpha = 0.8, quantile_lines=TRUE,
+                      quantile_fun=function(x,...)mean(x)) + 
+    labs(x = "Boundary layer height (m)", y = "", fill = "Migration")+
+    scale_fill_manual(values=age_col)+
+    coord_cartesian(expand = F)+
+    theme_minimal() +
+    theme(legend.position = "none", text = element_text(size=15), 
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        strip.text.x = element_text(size = 20),
+        axis.line = element_line(colour = "black"),
+        axis.ticks = element_line(colour = "black"))
+ggarrange(ws, vv, bl, ncol = 1, nrow = 3, common.legend = T, legend = "bottom")
 ```
 
 ----
@@ -436,204 +467,105 @@ As a last step we standardize our predictors across the whole data set. This mea
 #standardize the predictors
 annotated_data <- annotated_data %>% 
   mutate(scaled_tail = as.numeric(scale(tail, center = T, scale = T)),
-         scaled_deltaT = as.numeric(scale(deltaT, center = T, scale = T)),
          scaled_blh = as.numeric(scale(BLH, center = T, scale = T)),
          scaled_angle = as.numeric(scale(cos(ta_), center = T, scale = T)),
          scaled_step = as.numeric(scale(log(sl_), center = T, scale = T)))
 
-# isolate strata containing values for SST
-annotated_data$stratum <- paste0(annotated_data$id_year, annotated_data$step_id_)
-
-seacrossing_points <- !is.na(annotated_data$SST)
-sum(seacrossing_points) # 99,489 NA values
-# select sea crossings
-seacrossings <- annotated_data[seacrossing_points == T,]
-
-# remove them from the data to remove sea-crossings
-annotated_data <- annotated_data %>%
-  filter(!stratum %in% seacrossings$stratum)
-
 ```
-
-----
+---
 
 ### 4. Build the model
 
-We need to model each individual in each year separately, which means fitting as many models as there are tracks. We can do this quickly using nested lists if we first write our model as a function and then pass it to the "purrr" package's "map" function.
+We need to model each individual in each year separately, which means fitting as many models as there are tracks.
 
-----
-```{r modeling}
+---
+```{r modeling, results='hide'}
 # write the model function
 modelTU <- function(df) {
   clogit(case_ ~ scaled_tail + scaled_blh + scaled_step + scaled_angle + scaled_tail*scaled_blh +
            strata(step_id_), data = df)
 }
 
-
-# fit a single model to all the data including age as a predictor
-annotated_data$Migration <- as.factor(annotated_data$Migration)
-model_TVdT <- function(df) {
-  clogit(case_ ~ scaled_tail + scaled_deltaT + scaled_step + scaled_angle + scaled_tail*scaled_deltaT + Migration +
-           strata(id_year_step), data = df)
-}
-
-model_TVdT3 <- function(df) {
-  clogit(case_ ~ scaled_tail + Migration + scaled_deltaT + scaled_step + scaled_angle + scaled_tail*scaled_deltaT*Migration + 
-           strata(id_year_step), data = df)
-}
-
 #check how many true steps remain after filtering
 print(annotated_data %>% group_by(id_year) %>% tally(case_ == 1), n= 41)
 
 # fit separate models for each journey and collect the coefficients
-SSF_results <- annotated_data %>% 
-  group_by(id_year) %>% 
-  nest() %>% 
-  mutate(ssf_modelTU = purrr::map(data, modelTU),
-         ssf_coefsTU = purrr::map(ssf_modelTU, coef),
-         #ssf_se = purrr::map(coef(summary(ssf_modelTU))[, "se(coef)"]))
-         ssf_summary = purrr::map(ssf_modelTU, summary),
-         ssf_seT = purrr::map(sqrt(diag(vcov(ssf_summary)))[1]))
-
 SSF_results <- data.frame()
 
 for (i in sort(unique(annotated_data$id_year))) {
+  # select data for just one track
   data <- annotated_data[which(annotated_data$id_year == i),]
+  # fit the model
   ssf_modelTU <- modelTU(data)
+  # extract the coefficients
   temp <- data.frame(coefs = coef(ssf_modelTU))
+  # extract the error
   temp$se <- as.numeric(coef(summary(ssf_modelTU))[, "se(coef)"])
+  # add the track iD
   temp$id_year <- i
+  # and the migration number
+  temp$migration <- unique(data$migration)
+  temp$category <- unique(data$category)
+  # and save the information
   SSF_results <- rbind(SSF_results, temp)
   print(paste0("Extracted model coefficients for ", i, "."), quotes=F)
 }
 
+# add the variable names
 SSF_results$variable <- rep(c("Wind support", "Boundary layer height", "ln_sl", "cos_ta", "Interaction"), times = nrow(SSF_results)/5)
 
 ```
 
 ----
 
-### 5. Extract the model coefficients for plotting
+### 5. Plot the model coefficients
 
-----
-```{r extraction}
-# flatten the coefficient column
-# plot_data <- unnest(SSF_results, ssf_coefsTU)
-# # label the coefficients by variable
-# plot_data$var <- rep(c("Wind support", "Boundary layer height", "ln_sl", "cos_ta", "Interaction"), times = nrow(plot_data)/5)
-```
+We plot the coefficients and their error grouped by migration, along with box plots for each migration to show the median for all individuals.
 
-----
+---
+```{r boxplots, message = F, warning=F, fig.height = 5, fig.width = 8}
+# filter the SSF_results so as not to display the step length and turn angle coefficients
+# (these factors of movement account for autocorrelation, but are not informing the study).
+plot_data <- SSF_results %>% filter(variable != "ln_sl" & variable != "cos_ta")
+# rename the variables and define the factor order to arrange the plot
+plot_data$variable[grep("Boundary layer height", plot_data$variable)] <- "Uplift (BLH)"
+plot_data$variable[grep("Interaction", plot_data$variable)] <- "Wind support X Uplift"
+plot_data$variable <- factor(plot_data$variable, levels = c("Wind support", "Uplift (BLH)", "Wind support X Uplift"))
 
-To plot data in groups, we add the life stage and migration number to each individual.
-
-----
-```{r id_year}
-#separate the id_year column so that stage is identified by individual
-SSF_results <- separate(SSF_results, col = "id_year", c("id", "year"), remove = F)
-SSF_results$stage <- NA # create an empty column to store values
-SSF_results$stage[which(SSF_results$id == "Annika" |
-                         SSF_results$id == "Jouko" |
-                         SSF_results$id == "Mikko" |
-                         SSF_results$id == "Paivi" |
-                         SSF_results$id == "Tiina" )] <- "adult" # label individuals of unknown age
-SSF_results$stage[which(is.na(SSF_results$stage))] <- "juvenile" # label individuals tagged as fledglings
-
-#add the number of each migration
-SSF_results$Migration <- NA 
-SSF_results$Migration[which(SSF_results$id_year == "Jaana_2013" | # add year 2 info
-                             SSF_results$id_year == "Lars_2013" | 
-                             SSF_results$id_year == "Mohammed_2018" | 
-                             SSF_results$id_year == "Senta_2015" | 
-                             SSF_results$id_year == "Valentin_2015" |
-                             SSF_results$id_year == "Annika_2012" | 
-                             SSF_results$id_year == "Jouko_2012" |
-                             SSF_results$id_year == "Paivi_2014" |
-                             SSF_results$id_year == "Mikko_2012" |
-                             SSF_results$id_year == "Tiina_2012")] <- "2"
-
-SSF_results$Migration[which(SSF_results$id_year == "Jaana_2014" | # add year 3 info
-                             SSF_results$id_year == "Lars_2014" | 
-                             SSF_results$id_year == "Senta_2016" |
-                             SSF_results$id_year == "Annika_2013" |
-                             SSF_results$id_year == "Jouko_2013" |
-                             SSF_results$id_year == "Mikko_2013" |
-                             SSF_results$id_year == "Paivi_2015" |
-                             SSF_results$id_year == "Mohammed_2019" |
-                             SSF_results$id_year == "Tiina_2013")] <- "3"
-
-SSF_results$Migration[which(SSF_results$id_year == "Lars_2015" | # add year 4 info
-                             SSF_results$id_year == "Mohammed_2020")] <- "4"
-
-SSF_results$Migration[which(SSF_results$id_year == "Annika_2014" | # add year 5 info
-                             SSF_results$id_year == "Jouko_2014" |
-                             SSF_results$id_year == "Mikko_2014" | 
-                             SSF_results$id_year == "Mikko_2015" |
-                             SSF_results$id_year == "Paivi_2016" |
-                             SSF_results$id_year == "Tiina_2014" |
-                             SSF_results$id_year == "Tiina_2015")] <- "5 +" 
-SSF_results$Migration[which(is.na(SSF_results$Migration))] <- "1" # everything else is year 1
-
-SSF_results$category <- NA
-SSF_results$category[which(SSF_results$Migration == 1)] <- "First year"
-SSF_results$category[which(SSF_results$Migration == "5 +")] <- "Adult"
-SSF_results$category[which(SSF_results$Migration %in% c(2,3,4))] <- "Intermediate"
-SSF_results$category <- factor(SSF_results$category, levels = c("First year", "Intermediate", "Adult"))
-
-
-```
-
-----
-
-### 6. Plot the coefficients
-
-First, select the data from the stage and variable of interest. Then, select the data from individuals that survived in multiple years and remove the multiple year individuals from the set containing the rest. Plot a box plot with dashed lines for all the individuals, and then layer on a box plot with solid lines and without whiskers. Add points for birds surviving only one year. Layer on points for birds surviving in multiple years and connect those points with lines. Finally plot all of this in panels with separate axes.
-
-----
-```{r boxplots, fig.height = 5, fig.width = 7}
-
-
-
-# create a new function for a slimmed plot
-SSF_plot <- function(data, y_axis, x_axis, error, var) {
-  # select the data to plot
-  plot_data = data %>% filter(variable == var)
-  # plot them
-  ggplot(plot_data, aes(x={{x_axis}}, y={{y_axis}})) + 
-  # a box plot with all the data
-  geom_boxplot(outlier.shape = NA, color = "slategray3", linetype="dashed", lwd = 1)+ 
-  # a second box plot without whiskers
-  stat_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = "#DBE3F3", color = "slategray3", lwd = 1, fatten = 1) +
-    geom_errorbar(
+# make the figure
+ggplot(plot_data, aes(x=category, y=coefs)) + 
+  # plot a box plot without outliers (the points are added later)
+  geom_boxplot(outlier.shape = NA, fill = "#DFF2F6", color = "#9FD9E5", lwd = 1, fatten = 1.5)+ 
+  # and a second boxplot with no whiskers, no fill, and no median to cover 
+  # the first plot's outlines
+  geom_boxplot(aes(ymin = ..lower.., ymax = ..upper..), outlier.shape = NA, fill = NA, color = "#DFF2F6", lwd = 1.5, fatten = NULL) +
+  # add error bars for the points using +/- standard error from SSF_results
+  geom_errorbar(
     aes(ymin = coefs-se, ymax = coefs+se, group = id_year),
-    position = position_dodge(0.8), width = 1, color = "grey50"
+    position = position_dodge(0.8), width = 0, color = "grey60"
     )+
-  geom_point(position = position_dodge(0.8), aes(x={{x_axis}}, y={{y_axis}}, group = id_year), size = 2)+
+  # add the points for the coefficients
+  geom_point(position = position_dodge(0.8), aes(group = id_year), size = 2)+
   # make a line at y = 0 for clarity
-  geom_hline(yintercept = 0) +
-  # remove the labels
-  labs(x = "", y="") +
-  #scale_y_continuous(breaks = round(seq(min(plot_data$coefs), max(plot_data$coefs), by = 0.5),1))+
-  # remove background grid, make axis labels black, and increase text size
-  theme_classic() +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  # orrect the axis labels
+  labs(x = "Migration", y="Coefficient") +
+  # remove background grid, make axis labels black, increase text size, and add axes
+  theme_minimal() +
+    facet_wrap(facets = "variable", nrow = 1, ncol = 3) +
     theme(legend.position = "none", text = element_text(size=15), 
         axis.text.x = element_text(colour = "black"),
-        axis.text.y = element_text(colour = "black"))
-}
+        axis.text.y = element_text(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        strip.text.x = element_text(size = 20),
+        axis.line = element_line(colour = "black"),
+        axis.ticks = element_line(colour = "black"))
 
-
-support_plot <- SSF_plot(SSF_results, coefs, category, var = "Wind support") + ggtitle("Wind support")
-uplift_plot <- SSF_plot(SSF_results, coefs, category, var = "Boundary layer height") + ggtitle("Uplift (BLH)")
-interaction_plot <- SSF_plot(SSF_results, coefs, category, var = "Interaction") + ggtitle("Wind support x Uplift")
-
-figure1 <- ggarrange(support_plot, uplift_plot, interaction_plot, ncol = 3, legend = "none")
-
-annotate_figure(figure1, left = text_grob("Coefficient", rot = 90, size = 20),
-                bottom = text_grob("Migration", size = 20))
 ```
 
 
-Figure 1: The importance of wind support, uplift, and their interaction to route selection over migrations. Negative values of vertical velocity correspond to rising air. We fitted separate conditional logistic regressions for each track and extracted the coefficients for each predictor. Coefficients of individuals tracked in multiple years are connected by lines and highlighted in color.
+Figure 1: The importance of wind support, uplift (boundary layer height), and their interaction to route selection over migrations. "First year" denotes just the juveniles' first autumn migrations, "Intermediate" includes the second, third, and fourth autumn migrations by those same birds. "Adult" refers to different birds that were tagged as adults. We fitted separate conditional logistic regressions for each track and extracted the coefficients for each predictor.
 
 
 ----
@@ -646,7 +578,9 @@ We have our result, but we do not know how well the model actually performed. We
 
 ```{r validation,warning=F}
 # pare the data down
-validation_data <- annotated_data %>% select(case_, id, year, burst_, step_id_, scaled_tail, scaled_blh, scaled_step, scaled_angle)  %>%  na.omit()
+validation_data <- annotated_data %>% select(case_, id, year, burst_, step_id_, scaled_tail,
+                                             scaled_blh, scaled_step, scaled_angle)  %>%
+                                             na.omit()
 
 # partition the data into 80% for training the model and 20% for testing it
 # ensuring that observed and alternative steps are included in both sets (case_ 0 and 1)
@@ -655,19 +589,11 @@ partitioning <- validation_data$case_ %>%
 
 training_data <- validation_data[partitioning,]
 testing_data <- validation_data[-partitioning,]
-```
 
-
-```{r validation_model,warning=F, eval=F}
 # fit the model to 80% of the data
-validation_model <- clogit(case_ ~ scaled_tail + scaled_blh + scaled_step + scaled_angle + scaled_tail*scaled_blh + strata(step_id_), data = training_data)
-```
+validation_model <- clogit(case_ ~ scaled_tail + scaled_blh + scaled_step + scaled_angle +
+                           scaled_tail*scaled_blh + strata(step_id_), data = training_data)
 
-```{r valid_tibble, echo=F,message=F}
-load("validation_model_Feb8.RData")
-```
-
-```{r validation2,warning=F}
 # extract the model predictions
 predictions <- validation_model %>% predict(testing_data)
 
@@ -683,80 +609,32 @@ data.frame(RMSE = RMSE(predictions, testing_data$case_),
 
 Because we have only one data set, we cannot compare our result to the results from similar systems: we have no other data sets of the same size, with the same sampling effort, and from populations with the same means and variances of the parameters of interest. However, we can generate alternative data sets that meet these requirements and that also meet a null expectation. Then, we can compare our observed effects to the effects in these alternative data. To do this, we repeatedly randomize our response variable with respect to our predictor variables, model these randomized data, and store the results. The outcome is a distribution of results that would occur if there were no relationship between the dependent and independent variables in our model. 
 
-### 1. Prepare the data for modeling
+### 1. Perform data stream permutation and test for significance
 
-Here, we use the "mosaic" package to perform the permutations because it allows us to maintain a stratified design in our models. 
+Once we have modeled all of our observed data, we can run our randomizations. Unfortunately, this becomes a repetitive process because each migration must be modeled separately, the significance of each variable in each migration must be calculated separately, and each distribution of coefficients must be plotted separately. We create an empty data frame so that we have a place to store our results. Then, we use the "mosaic" package to re-sample our data set. We hold our predictors in the same positions relative to the identifying data for each individual and to the other predictors. We shuffle the dependent variable within each group, which we define as a step containing one observation and 100 random locations. Next, we fit our model to the randomized data, extract the coefficients, and save them in our data frame. We repeat this process as many times as we want, which we defined as "no.perm". 
 
----
-```{r environment, message=FALSE, warning=FALSE, results='hide'}
+```{r permutations, message=FALSE, warning=FALSE}
 
 # set the number of permutations
 # here it is equal to the number of used + available steps in each stratum, 
-# i.e. all available permutations
+# i.e. all available permutations in a stratum
 no.perm <- 101 
-
-# label the data with life stage and migration information. This is a repetition of what 
-# was done above, but here we label the full data rather than the coefficients
-annotated_data$stage <- NA
-annotated_data$stage[which(annotated_data$id == "Annika" |
-                             annotated_data$id == "Jouko" |
-                             annotated_data$id == "Mikko" |
-                             annotated_data$id == "Paivi" |
-                             annotated_data$id == "Tiina" )] <- "adult"
-annotated_data$stage[which(is.na(annotated_data$stage))] <- "juvenile"
-                                
-annotated_data$Migration <- NA # create an empty column to store values
-annotated_data$Migration[which(annotated_data$id_year == "Jaana_2013" | # add year 2 info
-                                 annotated_data$id_year == "Lars_2013" | 
-                                 annotated_data$id_year == "Mohammed_2018" | 
-                                 annotated_data$id_year == "Senta_2015" | 
-                                 annotated_data$id_year == "Valentin_2015")] <- "second"
-
-annotated_data$Migration[which(annotated_data$id_year == "Jaana_2014" | # add year 3 info
-                                 annotated_data$id_year == "Lars_2014" | 
-                                 annotated_data$id_year == "Mohammed_2019" |
-                                 annotated_data$id_year == "Senta_2016")] <- "third"
-
-annotated_data$Migration[which(annotated_data$id_year == "Lars_2015" | # add year 4 info
-                                 annotated_data$id_year == "Mohammed_2020")] <- "z_fourth"
-
-annotated_data$Migration[which(annotated_data$id_year == "Annika_2014" | # add year 5 info
-                            annotated_data$id_year == "Jouko_2014" |
-                            annotated_data$id_year == "Mikko_2014" | 
-                            annotated_data$id_year == "Mikko_2015" |
-                            annotated_data$id_year == "Paivi_2016" |
-                            annotated_data$id_year == "Tiina_2014" |
-                            annotated_data$id_year == "Tiina_2015")] <- "adult" 
-annotated_data$Migration[which(is.na(annotated_data$Migration))] <- "first" # everything else is year 1
-
-
 # make a new unique vector for each step and migration to serve as strata during permutation
 annotated_data$id_year_step <- paste(annotated_data$id_year, annotated_data$step_id_, sep="_")
-```
-
----
-
-
-### 2. Perform data stream permutation and test for significance
-
-Once we have modeled all of our observed data, we can run our randomizations. Unfortunately, this becomes a repetitive process because each migration must be modeled separately, the significance of each variable in each migration must be calculated separately, and each distribution of coefficients must be plotted separately. We create an empty data frame so that we have a place to store our results. Then, we use the "mosaic" package to re-sample our data set. We hold our predictors in the same positions relative to the identifying data for each individual and to the other predictors. We shuffle the dependent variable within each group, which we define as a step containing one observation and 100 random locations. Next, we fit our model to the randomized data, extract the coefficients, and save them in our data frame. We repeat this process as many times as we want, which we defined as "no.perm" above. 
-
-```{r permutations, message=FALSE, warning=FALSE}
 #create an empty data frame to store the coefficients in
 random_model <- data.frame()
-# create a vector to identify migrations by
-migrations <- unique(annotated_data$Migration)
-# and a second, empty one that will act as a column in the data frame 
+# create an empty vector that will act as a column in the data frame 
 ```
 ```{r permutations2, message=FALSE, warning=FALSE, results=F, echo=T, eval=F}
-Migration <- c()
+Category <- c()
 # create a loop to go through each migration
-for (j in sort(migrations)) {
+for (j in sort(unique(annotated_data$category))) {
   # select the data from the given migration
-  temp_data <- annotated_data[which(annotated_data$Migration == j),]
+  temp_data <- annotated_data[which(annotated_data$category == j),]
 # then create a second loop to permute the data
   for (i in 1:no.perm) {
     # this is the workhorse, taking each migration and permuting within the strata
+    # while holding the predictors variables in place so as not to break their relationships
     rando <- mosaic::resample(temp_data, replace = F, groups = id_year_step, 
                               shuffled = "case_", fixed = c("id","year","scaled_tail",
                               "scaled_blh","timestamp", "scaled_step", "scaled_angle",
@@ -768,18 +646,21 @@ for (j in sort(migrations)) {
     # store the coefficients in the data frame
     random_model <- rbind(random_model, temp_coefs)
     # add three more migration labels to identify the three coefficients
-    Migration <- c(Migration,j,j,j,j,j)
+    Category <- c(Category,j,j,j,j,j)
     # and finally we let ourselves know we have done this
     print(paste0("Completed permutation ", i, "."))
   }
-  print(paste0("Completed permutation of migration ", j, "."))
+  print(paste0("Completed permutation of ", j, " migration."))
 }
 colnames(random_model)[1] <- "Estimate"
 # add each migration label to the coefficients
-random_model$Migration <- Migration
+random_model$Category <- Category
+random_model$Category <- factor(random_model$Category, levels=c("First year", "Intermediate","Adult"))
 ```
-```{r hidden, echo=FALSE, warning=F, error=F}
-load("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf/random_model_Jan20.RData")
+```{r hidden2, echo=FALSE, warning=F, error=F}
+#load("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf/random_model_Jan20.RData")
+load("categories_blh_17.5.22.RData")
+colnames(random_model)[6] <- "Category"
 ```
 ```{r model}
 head(random_model[,1:5])
@@ -788,62 +669,75 @@ head(random_model[,1:5])
 ---
 
 Once we have aggregated all of the coefficients of the permutations for each migration, we compare the observed coefficients to the randomized ones to test for significance.
+```{r rand_loads, echo=F, message=F,warning=F, eval=F}
+## 27.04.2022
+# 17 perm done twice
+#load(file="rando_270422.RData")
+## 06.05.2022
+# scaled Delta T model with sl_ and ta_
+#save(random_model, file = "delT_random.RData")
+# scaled BLH model with sl_ and ta_ and without sea crossings
+#save(random_model, file = "blh_scrm_random.RData")
+# scaled BLH model with sl_ and ta_ and sea crossings
+#save(random_model, file = "blh_sc_11.5.22.RData")
+```
 
 ---
 ```{r significance}
-## 27.04.2022
-# 17 perm done twice
-load(file="rando_270422.RData")
-## 06.05.2022
-# scaled Delta T model with sl_ and ta_
-save(random_model, file = "delT_random.RData")
-# scaled BLH model with sl_ and ta_ and without sea crossings
-save(random_model, file = "blh_scrm_random.RData")
-# scaled BLH model with sl_ and ta_ and sea crossings
-save(random_model, file = "blh_sc_11.5.22.RData")
 
 ## First extract the coefficients of the models for the observed data
 # fit the same model as above, but now for each migration rather than each individual track
-clogit_results <- annotated_data %>% 
-  group_by(Migration) %>% 
-  nest() %>% 
-  mutate(model_col = purrr::map(data, modelTU),
-         coefsTU = purrr::map(model_col, coef)) %>% 
-  unnest(cols = c(coefsTU, Migration)) %>% 
-  mutate(variable = c("tail","blh", "sl_", "ta_", "interaction")) %>%
-  arrange(variable, Migration)
 
-clogit_results
+clogit_results <- data.frame()
+
+for (i in sort(unique(annotated_data$category))) {
+  data <- annotated_data[which(annotated_data$category == i),]
+  ssf_modelTU <- modelTU(data)
+  temp <- data.frame(coefs = coef(ssf_modelTU))
+  temp$se <- as.numeric(coef(summary(ssf_modelTU))[, "se(coef)"])
+  temp$category <- i
+  clogit_results <- rbind(clogit_results, temp)
+  print(paste0("Extracted model coefficients for ", i, "."), quotes=F)
+}
+
+clogit_results$variable <- rep(c("Wind support", "Boundary layer height", 
+                                 "ln_sl", "cos_ta", "Interaction"), 
+                                 times = nrow(clogit_results)/5)
+
+print(clogit_results)
+
 
 # rename the interaction term in the random coefficients to keep it unique
-row.names(random_model) <- sub("scaled_tail:scaled_blh", "interaction",
+row.names(random_model) <- sub("scaled_tail:scaled_blh", "Interaction",
+                               row.names(random_model))
+# rename the other terms to match clogit_results
+row.names(random_model) <- sub("scaled_blh", "Boundary layer height",
+                               row.names(random_model))
+row.names(random_model) <- sub("scaled_tail", "Wind support",
                                row.names(random_model))
 # rename the sl_ and ta_ to prevent errors in escaping parentheses
-# row.names(random_model) <- sub("cos\\(ta_\\)", "ta_", row.names(random_model))
-# row.names(random_model) <- sub("log\\(sl_\\)", "sl_", row.names(random_model))
 row.names(random_model) <- sub("scaled_angle", "ta_", row.names(random_model))
 row.names(random_model) <- sub("scaled_step", "sl_", row.names(random_model))
 
-# create a vector of the variables in clogit_results
-variable <- unique(clogit_results$variable)
-# and a data frame to store the significance values in
+
+# create a data frame to store the significance values in
 significances <- data.frame()
 
 # then calculate the significance of the difference between each set of permuted coefficients 
 # and the observed 
-for (i in sort(migrations)) {
+for (i in sort(unique(annotated_data$category))) {
   # select the coefficients for migration i
-  temp_observed <- clogit_results[which(clogit_results$Migration == i),]
+  temp_observed <- clogit_results[which(clogit_results$category == i),]
   # and the coefficients from permuted data of migration i
-  temp_random <- random_model[which(random_model$Migration == i),]
-  for (j in sort(variable)) {
+  temp_random <- random_model[which(random_model$Category == i),]
+  for (j in sort(unique(clogit_results$variable))) {
     # select the coefficient that is also variable j
     temp_obs <- temp_observed[which(temp_observed$variable == j),]
     # and the permuted coefficients of j
     temp_rand <- temp_random[grepl(j, row.names(temp_random)),]
     # count up the permuted coefficients with a more extreme value than the observed and 
     # divide by the number of coefficients to get the proportion
-    significance <- sum(abs(temp_obs$coefsTU) < abs(temp_rand$Estimate))/no.perm
+    significance <- sum(abs(temp_obs$coefs) < abs(temp_rand$Estimate))/no.perm
     temp_sig <- c(i, j, significance)
     significances <- rbind(significances, temp_sig)
   }
@@ -851,20 +745,23 @@ for (i in sort(migrations)) {
 
 colnames(significances) <- c("Migration", "Variable", "Significance")
 
-significances %>% arrange(Variable, Migration)
+significances %>% arrange(Variable)
 ```
 
 ---
 
 ## Plot the supplemental materials
 
-Plot the used and available wind support and uplift.
+Plot effects of wind support and uplift for each individual over time.
 
 ```{r supplots}
 # select colors that are distinct
 id_colors <- c("#542344","#1478A3","#00A354","#FFBF00","#F34213")
 # create a vector identifying the five birds that transmitted multiple journeys
+SSF_results <- separate(SSF_results, col = "id_year", c("id", "year"), remove = F)
 retransmitted <- c("Jaana", "Senta", "Valentin", "Mohammed", "Lars")
+# arrange the migrations in order
+SSF_results$migration <- factor(SSF_results$migration, levels = c("1", "2", "3", "4", "Adult"))
 # build a function for plotting 
 SSF_plot <- function(data, y_axis, x_axis, var) {
   # select the data to plot
@@ -898,176 +795,255 @@ SSF_plot <- function(data, y_axis, x_axis, var) {
         axis.text.y = element_text(colour = "black"))
 }
 
-support_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Wind support") + ggtitle("Wind support")
-uplift_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Boundary layer height") + ggtitle("Uplift (BLH)")
-interaction_plot <- SSF_plot(SSF_results, coefs, Migration, var = "Interaction") + ggtitle("Wind support x Uplift")
+support_plot <- SSF_plot(SSF_results, coefs, migration, var = "Wind support") + ggtitle("Wind support")
+uplift_plot <- SSF_plot(SSF_results, coefs, migration, var = "Boundary layer height") + ggtitle("Uplift (BLH)")
+interaction_plot <- SSF_plot(SSF_results, coefs, migration, var = "Interaction") + ggtitle("Wind support x Uplift")
 
 figure1 <- ggarrange(support_plot, uplift_plot, interaction_plot, ncol = 3, legend = "none")
 
 annotate_figure(figure1, left = text_grob("Coefficient", rot = 90, size = 20),
                 bottom = text_grob("Migration", size = 20))
-
-
-# The values of wind support (m/s) and uplift (Pa/s) available and used in each migratory
-# journey
-
-# a function for figure legends
-add_legend <- function(...) {
-  opar <- par(fig=c(0, 1, 0, 1), oma=c(0, 0, 0, 0), 
-              mar=c(0, 0, 0, 0), new=TRUE)
-  on.exit(par(opar))
-  plot(0, 0, type='n', bty='n', xaxt='n', yaxt='n')
-  legend(...)
-}
-
-# labels for the plots
-labels <- c("Wind support (m/s)", "Vertical velocity (Pa/s)")
-variables <- c("tail", "vertical_pressure")
-
-# figure dimensions
-par(mfrow = c(1, 2), 
-    oma = c(3,0,0,0),
-    las = 1)
-
-
-# loop through each box and plots it
-for(i in 1:length(variables)){
-   # an empty plot
-  boxplot(unlist(annotated_data[,variables[i]]) ~ unlist(annotated_data[,"Migration"]), 
-          data = annotated_data, boxfill = NA, border = NA, main = " ", 
-          xlab = "Migration", ylab = labels[i])
-   # boxplots for the used points 
-  boxplot(unlist(annotated_data[annotated_data$case_ == 1, variables[i]]) ~
-            unlist(annotated_data[annotated_data$case_ == 1,"Migration"]),
-          xlab = "Migration", ylab = labels[i],
-          yaxt = "n", xaxt = "n", add = T, boxfill = "cornflowerblue", 
-          boxwex = 0.25, at = c(1,2,3,4,5) - 0.15)
-  # boxplots for available points
-  boxplot(unlist(annotated_data[annotated_data$case_ == 0, variables[i]]) ~
-            unlist(annotated_data[annotated_data$case_ == 0, "Migration"]),
-          yaxt = "n", xaxt = "n", add = T, boxfill = "grey", 
-          boxwex = 0.25, at = c(1,2,3,4,5) + 0.15)
-  
-}
-
-# add the legend with the function above
-add_legend("bottom", legend=c("Used", "Available"), pch=20, 
-           col=c("cornflowerblue", "gray"),
-           horiz=TRUE, bty='n', cex=1.3, pt.cex = 2)
-
-# The values of wind support (m/s) and uplift (Pa/s) available and used in each calendar
-# year of collection
-
-years <- sort(unique(annotated_data$year))
-
-# reset the plotting window
-par(mfrow = c(1, 2), 
-    oma = c(3,0,0,0),  #outer margin
-    las = 1)
-
-# loop through each category and plot
-for(i in 1:length(variables)){
-  
-  boxplot(unlist(annotated_data[,variables[i]]) ~ unlist(annotated_data[,"year"]), 
-          data = annotated_data, boxfill = NA, border = NA, main = " ", xlab = "Year",
-          ylab = labels[i])
-  boxplot(unlist(annotated_data[annotated_data$case_ == 1, variables[i]]) ~
-            unlist(annotated_data[annotated_data$case_ == 1,"year"]), 
-          yaxt = "n", xaxt = "n", add = T, boxfill = "cornflowerblue", 
-          boxwex = 0.25, at = c(1,2,3,4,5,6,7,8,9) - 0.15)
-  axis(1, at=1:9, labels=years[1:9])
-  boxplot(unlist(annotated_data[annotated_data$case_ == 0, variables[i]]) ~
-            unlist(annotated_data[annotated_data$case_ == 0, "year"]),
-          yaxt = "n", xaxt = "n", add = T, boxfill = "grey",
-          boxwex = 0.25, at = c(1,2,3,4,5,6,7,8,9) + 0.15)
-  
-}
-add_legend("bottom", legend=c("Used", "Available"), pch=20, 
-           col=c("cornflowerblue", "gray"),
-           horiz=TRUE, bty='n', cex=1.3, pt.cex = 2)
 ```
 
 
-Finally, plot the distributions of coefficients derived from randomized data along with the observed coefficients.
+Plot the distributions of coefficients derived from randomized data along with the observed coefficients.
 
 ---
 ```{r plots, message=FALSE, warning=FALSE, results='hide', out.extra='angle=90', fig.dim=c(6,6)}
 # Comparisons of the observed coefficients (red) and the distribution of coefficients from
 # randomized data (black) in each migratory journey (1 to 5 or more) and for each predictor.
 
-# set the number of bins for the histograms
-no.bin <- 25 
 # order the migrations
-trip <- sort(migrations)
+trip <- unique(clogit_results$category)
 
 # write a function to draw the plots
 null_plot <- function(data, x_axis, journey, var) {
   # select the variable to plot
   var = rownames(data)[1]
-  # set the name to remove "scaled_" as needed
-  var <- ifelse(grepl("scaled_", var) == T, sub("scaled_", "", var), var)
   # select the migration to plot
-  ggplot(data %>% filter(Migration == {{journey}}), aes({{x_axis}})) + 
+  ggplot(data %>% filter(Category == {{journey}}), aes({{x_axis}})) + 
     # draw a histogram of the coefficients from the randomized data
-    geom_histogram(fill="black", bins = no.bin) +
+    geom_histogram(fill="black", bins = 25) +
     # draw a line to indicate the observed coefficient
-    geom_vline(aes(xintercept = clogit_results[which(clogit_results$Migration == {{journey}} & grepl({{var}}, clogit_results$variable) == T),]$coefsTU), 
-               color="red", size=1)+ 
+    geom_vline(aes(xintercept = clogit_results$coefs[which(clogit_results$category == {{journey}} & clogit_results$variable == {{var}})]), 
+               color="red", size = 1)+ 
+    # add axis labels
+    labs(y=NULL, x= journey)+
+    # clean up the plotting area
     theme_classic() + 
+    # increase contrast
     theme(legend.position = "none", text = element_text(size=15), 
-          axis.text = element_text(colour = "black"), axis.title = element_blank())
+          axis.text = element_text(colour = "black"))+
+    # if the plot is of the interaction, add an x-axis label for migration
+    if(var == "Interaction"){theme(axis.title = element_text(
+      size = 15))}else{theme(axis.title = element_blank())}
 }
 
 # separate the data by variable
-ct <- filter(random_model, grepl("tail", rownames(random_model)))
-cl <- filter(random_model, grepl("blh", rownames(random_model)))
-ci <- filter(random_model, grepl("interaction", rownames(random_model)))
-cs <- filter(random_model, grepl("sl_", rownames(random_model)))
-ca <- filter(random_model, grepl("ta_", rownames(random_model)))
+ct <- filter(random_model, grepl("Wind support", rownames(random_model)))
+cl <- filter(random_model, grepl("Boundary layer height", rownames(random_model)))
+ci <- filter(random_model, grepl("Interaction", rownames(random_model)))
 
 # create the plots
-first_tail <- null_plot(ct, Estimate, journey = trip[2]) + ggtitle("Wind support")
-second_tail <- null_plot(ct, Estimate, journey = trip[3]) + ggtitle(" ")
-third_tail <- null_plot(ct, Estimate, journey = trip[4]) + ggtitle(" ")
-fourth_tail <- null_plot(ct, Estimate, journey = trip[5]) + ggtitle(" ")
-fifth_tail <- null_plot(ct, Estimate, journey = trip[1]) + ggtitle(" ")
+first_tail <- null_plot(ct, Estimate, trip[1]) + ggtitle("Wind support")
+second_tail <- null_plot(ct, Estimate, trip[2]) + ggtitle(" ")
+third_tail <- null_plot(ct, Estimate, trip[3]) + ggtitle(" ")
 
-first_lift <- null_plot(cl, Estimate, journey = trip[2]) + ggtitle("Uplift (BLH)")
-second_lift <- null_plot(cl, Estimate, journey = trip[3]) + ggtitle(" ")
-third_lift <- null_plot(cl, Estimate, journey = trip[4]) + ggtitle(" ")
-fourth_lift <- null_plot(cl, Estimate, journey = trip[5]) + ggtitle(" ")
-fifth_lift <- null_plot(cl, Estimate, journey = trip[1]) + ggtitle(" ")
+first_lift <- null_plot(cl, Estimate, trip[1]) + ggtitle("Uplift (BLH)")
+second_lift <- null_plot(cl, Estimate, trip[2]) + ggtitle(" ")
+third_lift <- null_plot(cl, Estimate, trip[3]) + ggtitle(" ")
 
-first_inter <- null_plot(ci, Estimate, journey = trip[2]) + ggtitle("Wind x Uplift")
-second_inter <- null_plot(ci, Estimate, journey = trip[3]) + ggtitle(" ")
-third_inter <- null_plot(ci, Estimate, journey = trip[4]) + ggtitle(" ")
-fourth_inter <- null_plot(ci, Estimate, journey = trip[5]) + ggtitle(" ")
-fifth_inter <- null_plot(ci, Estimate, journey = trip[1]) + ggtitle(" ")
-
-first_step <- null_plot(cs, Estimate, journey = trip[2]) + ggtitle("log Step length")
-second_step <- null_plot(cs, Estimate, journey = trip[3]) + ggtitle(" ")
-third_step <- null_plot(cs, Estimate, journey = trip[4]) + ggtitle(" ")
-fourth_step <- null_plot(cs, Estimate, journey = trip[5]) + ggtitle(" ")
-fifth_step <- null_plot(cs, Estimate, journey = trip[1]) + ggtitle(" ")
-
-first_angle <- null_plot(ca, Estimate, journey = trip[2]) + ggtitle("cos Turning angle")
-second_angle <- null_plot(ca, Estimate, journey = trip[3]) + ggtitle(" ")
-third_angle <- null_plot(ca, Estimate, journey = trip[4]) + ggtitle(" ")
-fourth_angle <- null_plot(ca, Estimate, journey = trip[5]) + ggtitle(" ")
-fifth_angle <- null_plot(ca, Estimate, journey = trip[1]) + ggtitle(" ")
+first_inter <- null_plot(ci, Estimate, trip[1]) + ggtitle("Wind x Uplift")
+second_inter <- null_plot(ci, Estimate, trip[2]) + ggtitle(" ")
+third_inter <- null_plot(ci, Estimate, trip[3]) + ggtitle(" ")
 
 # combine the plots
-all_15 <- ggarrange(first_tail,second_tail,third_tail,fourth_tail,fifth_tail, 
-          first_lift,second_lift,third_lift,fourth_lift,fifth_lift, 
-          first_inter,second_inter,third_inter,fourth_inter,fifth_inter, 
-          # first_angle,second_angle,third_angle,fourth_angle,fifth_angle,
-          # first_step,second_step,third_step,fourth_step,fifth_step,
-          ncol = 5, nrow=3)
+permutations <- ggarrange(first_tail,second_tail,third_tail, 
+          first_lift,second_lift,third_lift, 
+          first_inter,second_inter,third_inter,
+          ncol = 3, nrow=3)
 
 # add common axes
-annotate_figure(all_15, left = text_grob("Frequency", rot = 90, size = 20),
+permutations <- annotate_figure(permutations, left = text_grob("Frequency", rot = 90, size = 20),
                 bottom = text_grob("Coefficient", size = 20))
+permutations
 ```
 
 ---
 
+To look at the permutations for all five migratory journeys separately:
+```{r permutations3, message=FALSE, warning=FALSE}
+#create an empty data frame to store the coefficients in
+random_model <- data.frame()
+# create an empty vector that will act as a column in the data frame 
+```
+```{r permutations4, message=FALSE, warning=FALSE, results=F, echo=T, eval=F}
+Migration <- c()
+# create a loop to go through each migration
+for (j in sort(unique(annotated_data$migration))) {
+  # select the data from the given migration
+  temp_data <- annotated_data[which(annotated_data$migration == j),]
+# then create a second loop to permute the data
+  for (i in 1:no.perm) {
+    # this is the workhorse, taking each migration and permuting within the strata
+    rando <- mosaic::resample(temp_data, replace = F, groups = id_year_step, 
+                              shuffled = "case_", fixed = c("id","year","scaled_tail",
+                              "scaled_blh","timestamp", "scaled_step", "scaled_angle",
+                              "step_id_"))
+    # model those permuted data sets
+    temp_model <- modelTU(rando)
+    # extract the coefficients from the model
+    temp_coefs <- summary(temp_model)$coefficients
+    # store the coefficients in the data frame
+    random_model <- rbind(random_model, temp_coefs)
+    # add three more migration labels to identify the three coefficients
+    Migration <- c(Migration,j,j,j,j,j)
+    # and finally we let ourselves know we have done this
+    print(paste0("Completed permutation ", i, "."))
+  }
+  print(paste0("Completed permutation of ", j, " migration."))
+}
+colnames(random_model)[1] <- "Estimate"
+# add each migration label to the coefficients
+random_model$Migration <- Migration
+```
+
+```{r hidden, echo=FALSE, warning=F, error=F}
+#load("C:/Users/Tess Bronnvik/Desktop/Br-nnvik_honey_buzzard_ssf/random_model_Jan20.RData")
+load("blh_sc_11.5.22.RData")
+random_model$Migration[which(random_model$Migration == "first")] <- 1
+random_model$Migration[which(random_model$Migration == "second")] <- 2
+random_model$Migration[which(random_model$Migration == "third")] <- 3
+random_model$Migration[which(random_model$Migration == "z_fourth")] <- 4
+random_model$Migration[which(random_model$Migration == "adult")] <- "Adult"
+random_model$Migration <- factor(random_model$Migration, levels=c(1,2,3,4,"Adult"))
+# rename the interaction term in the random coefficients to keep it unique
+row.names(random_model) <- sub("interaction", "scaled_tail:scaled_blh",
+                               row.names(random_model))
+```
+
+```{r model2}
+
+## First extract the coefficients of the models for the observed data
+# fit the same model as above, but now for each migration rather than each individual track
+
+clogit_results <- data.frame()
+
+for (i in sort(unique(annotated_data$migration))) {
+  data <- annotated_data[which(annotated_data$migration == i),]
+  ssf_modelTU <- modelTU(data)
+  temp <- data.frame(coefs = coef(ssf_modelTU))
+  temp$se <- as.numeric(coef(summary(ssf_modelTU))[, "se(coef)"])
+  temp$migration <- i
+  clogit_results <- rbind(clogit_results, temp)
+  print(paste0("Extracted model coefficients for ", i, "."), quotes=F)
+}
+
+clogit_results$variable <- rep(c("Wind support", "Boundary layer height", "ln_sl", "cos_ta", "Interaction"), times = nrow(clogit_results)/5)
+
+
+# rename the interaction term in the random coefficients to keep it unique
+row.names(random_model) <- sub("scaled_tail:scaled_blh", "Interaction",
+                               row.names(random_model))
+# rename the other terms to match clogit_results
+row.names(random_model) <- sub("scaled_blh", "Boundary layer height",
+                               row.names(random_model))
+row.names(random_model) <- sub("scaled_tail", "Wind support",
+                               row.names(random_model))
+# rename the sl_ and ta_ to prevent errors in escaping parentheses
+row.names(random_model) <- sub("scaled_angle", "ta_", row.names(random_model))
+row.names(random_model) <- sub("scaled_step", "sl_", row.names(random_model))
+
+
+# create a data frame to store the significance values in
+significances <- data.frame()
+
+# then calculate the significance of the difference between each set of permuted coefficients 
+# and the observed 
+for (i in sort(unique(annotated_data$migration))) {
+  # select the coefficients for migration i
+  temp_observed <- clogit_results[which(clogit_results$migration == i),]
+  # and the coefficients from permuted data of migration i
+  temp_random <- random_model[which(random_model$Migration == i),]
+  for (j in sort(unique(clogit_results$variable))) {
+    # select the coefficient that is also variable j
+    temp_obs <- temp_observed[which(temp_observed$variable == j),]
+    # and the permuted coefficients of j
+    temp_rand <- temp_random[grepl(j, row.names(temp_random)),]
+    # count up the permuted coefficients with a more extreme value than the observed and 
+    # divide by the number of coefficients to get the proportion
+    significance <- sum(abs(temp_obs$coefs) < abs(temp_rand$Estimate))/no.perm
+    temp_sig <- c(i, j, significance)
+    significances <- rbind(significances, temp_sig)
+  }
+}
+
+colnames(significances) <- c("Migration", "Variable", "Significance")
+
+significances %>% arrange(Variable, Migration)
+```
+```{r plots2, message=FALSE, warning=FALSE, results='hide', out.extra='angle=90', fig.dim=c(6,6)}
+# Comparisons of the observed coefficients (red) and the distribution of coefficients from
+# randomized data (black) in each migratory journey (1 to 5 or more) and for each predictor.
+
+# order the migrations
+trip <- sort(unique(clogit_results$migration))
+
+# write a function to draw the plots
+null_plot <- function(data, x_axis, journey, var) {
+  # select the variable to plot
+  var = rownames(data)[1]
+  # select the migration to plot
+  ggplot(data %>% filter(Migration == {{journey}}), aes({{x_axis}})) + 
+    # draw a histogram of the coefficients from the randomized data
+    geom_histogram(fill="black", bins = 25) +
+    # draw a line to indicate the observed coefficient
+    geom_vline(aes(xintercept = clogit_results$coefs[which(clogit_results$migration == {{journey}} & clogit_results$variable == {{var}})]), 
+               color="red", size = 1)+ 
+    # add axis labels
+    labs(y=NULL, x= journey)+
+    # clean up the plotting area
+    theme_classic() + 
+    # increase contrast
+    theme(legend.position = "none", text = element_text(size=15), 
+          axis.text = element_text(colour = "black"))+
+    # if the plot is of the interaction, add an x-axis label for migration
+    if(var == "Interaction"){theme(axis.title = element_text(
+      size = 15))}else{theme(axis.title = element_blank())}
+}
+
+# separate the data by variable
+ct <- filter(random_model, grepl("Wind support", rownames(random_model)))
+cl <- filter(random_model, grepl("Boundary layer height", rownames(random_model)))
+ci <- filter(random_model, grepl("Interaction", rownames(random_model)))
+
+# create the plots
+first_tail <- null_plot(ct, Estimate, journey = trip[1]) + ggtitle("Wind support")
+second_tail <- null_plot(ct, Estimate, journey = trip[2]) + ggtitle(" ")
+third_tail <- null_plot(ct, Estimate, journey = trip[3]) + ggtitle(" ")
+fourth_tail <- null_plot(ct, Estimate, journey = trip[4]) + ggtitle(" ")
+fifth_tail <- null_plot(ct, Estimate, journey = trip[5]) + ggtitle(" ")
+
+first_lift <- null_plot(cl, Estimate, journey = trip[1]) + ggtitle("Uplift (BLH)")
+second_lift <- null_plot(cl, Estimate, journey = trip[2]) + ggtitle(" ")
+third_lift <- null_plot(cl, Estimate, journey = trip[3]) + ggtitle(" ")
+fourth_lift <- null_plot(cl, Estimate, journey = trip[4]) + ggtitle(" ")
+fifth_lift <- null_plot(cl, Estimate, journey = trip[5]) + ggtitle(" ")
+
+first_inter <- null_plot(ci, Estimate, journey = trip[1]) + ggtitle("Wind x Uplift")
+second_inter <- null_plot(ci, Estimate, journey = trip[2]) + ggtitle(" ")
+third_inter <- null_plot(ci, Estimate, journey = trip[3]) + ggtitle(" ")
+fourth_inter <- null_plot(ci, Estimate, journey = trip[4]) + ggtitle(" ")
+fifth_inter <- null_plot(ci, Estimate, journey = trip[5]) + ggtitle(" ")
+
+# combine the plots
+all_15 <- ggarrange(first_tail,second_tail,third_tail,fourth_tail,fifth_tail, 
+          first_lift,second_lift,third_lift,fourth_lift,fifth_lift, 
+          first_inter,second_inter,third_inter,fourth_inter,fifth_inter,
+          ncol = 5, nrow=3)
+
+# add common axes
+all_15 <- annotate_figure(all_15, left = text_grob("Frequency", rot = 90, size = 20),
+                bottom = text_grob("Coefficient", size = 20))
+all_15
+```
